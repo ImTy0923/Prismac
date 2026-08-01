@@ -1,1 +1,0 @@
-([('prismac', '/Users/tybo/Desktop/Prismac/dist/prismac', 'EXECUTABLE')],)
