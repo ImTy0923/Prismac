@@ -50,12 +50,12 @@ Backgrounds (optional):
 Effects (optional):
     effects/        match, explode, hyper, levelup, go - as a folder of
                     frames, a sprite strip (name@8.png), or a .gif (Pillow).
-                    fire.png   drawn behind a flame gem, drifting
                     smoke.png  puffs out when a flame gem detonates
 
 Run:  python3 match3.py
 """
 
+import colorsys
 import math
 import os
 import random
@@ -100,7 +100,11 @@ LEVEL_BASE_TARGET = 1200   # points needed to clear level 1
 LEVEL_GROWTH = 1.35        # each level needs this much more than the last
 
 # timed mode
-ENDLESS, TIMED = "endless", "timed"
+ENDLESS, TIMED, TITLE = "endless", "timed", "title"
+
+# The clock is frozen in all of these: the board is not playable, so running
+# it down would be unfair. It restarts the moment GO! appears.
+PAUSED_STATES = ("intro", "flyoff", "banner", "settling")
 TIMED_SECONDS = 90.0        # 1:30 on the clock
 TIMED_MAX = 120.0           # you can bank up to this much, never more
 BONUS_SECONDS = 3.0         # what one +3 gem is worth
@@ -121,6 +125,17 @@ INTRO_TIME = 1.45        # whole board raining in at the start of a level
 INTRO_FALL = 0.70        # how long any single gem takes to land
 INTRO_STAGGER = 0.075    # each column starts this much later than the last
 INTRO_SOUND_EVERY = 2    # play GemFalling on every Nth column landing
+# level transition: gems fly off, banner holds, new gems drop, then GO
+FLYOFF_TIME = 1.15         # gems leaving the board
+BANNER_IN = 0.85           # levelup.png at the centre, before the hold
+BANNER_HOLD = 2.30         # how long it sits there
+BANNER_OUT = 0.55
+DROP_PAUSE = 0.30          # beat between the banner and the new gems
+GO_PAUSE = 0.65            # beat between the gems landing and GO!
+SHAKE_FLYOFF = 5.0
+SHAKE_DECAY = 2.6
+SHAKE_MAX = 12.0
+
 LEVELUP_MIN = 0.9        # floor for the level-up pause, even with no sound
 LEVELUP_MAX = 3.0        # ceiling, so a long track cannot stall the game
 GO_TIME = 0.85           # how long the GO! flash sits on screen
@@ -201,11 +216,18 @@ MUSIC_DIR = asset_folder("music")
 EFFECT_DIR = asset_folder("effects")
 BACKGROUND_DIR = asset_folder("backgrounds")
 UI_DIR = asset_folder("ui")
+TITLE_DIR = asset_folder("title")
+
+# title screen
+TITLE_BOB = 9.0            # pixels the logo drifts up and down
 FONT_DIR = asset_folder("fonts")
 
 # Skin art. Any missing file falls back to the drawn-in-code look, so these
 # can be dropped in one at a time.
-UI_IMAGES = ("board", "score", "buttoninfotile", "menubutton", "menubuttonhovered")
+UI_IMAGES = ("board", "score", "buttoninfotile", "menubutton",
+             "menubuttonhovered", "title")
+
+CREDITS = "Created by Ty Fukushima and Claude Code"
 
 AUDIO_EXTS = (".ogg", ".wav", ".mp3", ".flac")
 
@@ -230,7 +252,10 @@ SFX_ALIASES = {
     "select":  ("SelectGem", "Select", "Swap"),
     "nomatch": ("NoMatch", "Invalid", "BadSwap"),
     "match3":  ("Match3", "Match"),
-    "match45": ("Match4/5", "Match45", "Match4", "Match5", "PowerGem"),
+    "twomatch": ("TwoMatch", "Match4/5", "Match45"),
+    "flyoff": ("FlyingGem", "FlyGem", "GemFly"),
+    "flamemade": ("ExplodeGemCreated", "FlameGemCreated", "PowerGem"),
+    "hypermade": ("RainbowGemCreated", "HyperGemCreated", "Rainbow"),
     "falling": ("GemFalling", "Falling", "Fall", "Drop"),
     "explode": ("Explode", "Explosion", "Flame", "Boom"),
     "hyper":   ("Hypercube", "Hyper", "Supernova", "Explode"),
@@ -263,15 +288,20 @@ MUSIC_END = pygame.USEREVENT + 1
 EFFECT_FPS = 24
 EFFECT_SCALE = 1.9         # effects are drawn bigger than one tile
 MAX_EFFECTS = 36           # hard cap, so a big cascade cannot tank the frame rate
-EFFECT_NAMES = ("match", "explode", "hyper", "levelup", "go", "smoke")
+# "levelup" and "smoke" are stills, loaded separately - listing them
+# here would make the strip loader slice them into frames.
+EFFECT_NAMES = ("match", "explode", "hyper", "go")
 
 # Single stills that are decorated rather than played as animations.
-FIRE_ASSET = "fire"        # sits behind a flame gem, drifting and breathing
+# flame gem shine
+GLINT_PERIOD = 2.6         # seconds between one gem's glints
+GLINT_SWEEP = 0.30         # fraction of that spent actually sweeping
 SMOKE_ASSET = "smoke"      # puffs outward when a flame gem detonates
+BANNER_ASSET = "levelup"   # one still image, never sliced as a strip
 # Effects listed here are drawn additively, which is what makes fire and
 # sparks read as light rather than as stickers.
 # "go" is deliberately NOT additive - it is a readable overlay, not a light.
-EFFECT_ADDITIVE = {"match", "explode", "hyper", "levelup"}
+EFFECT_ADDITIVE = {"match", "explode", "hyper"}
 
 # Hidden reshuffle. F1 is the intended one, but macOS eats F1 unless you tick
 # "Use F1, F2, etc. as standard function keys" (or hold Fn), so backslash is
@@ -460,9 +490,8 @@ def fallback_gem(shape, color):
 def bake_gem(face, shape, color, hot=False):
     """Normal gem is the artwork, untouched.
 
-    A flame gem is the SAME artwork - the fire is a separate sprite drawn
-    behind it each frame so it can move. Without a fire.png we fall back to
-    warming the gem itself, so the state is still readable.
+    A flame gem is the same artwork with a warm lift, so the state reads even
+    on a single frame. The glow and the travelling glint are drawn live.
     """
     art = fallback_gem(shape, color) if face is None \
         else fit_in(face, TILE - GEM_PAD * 2)
@@ -472,13 +501,100 @@ def bake_gem(face, shape, color, hot=False):
 
     warmed = art.copy()
     tint = pygame.Surface(art.get_size(), pygame.SRCALPHA)
-    tint.fill((48, 16, 0))
+    tint.fill((30, 11, 0))
     warmed.blit(tint, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
     return centred(warmed)
 
 
-def load_still(name, size):
-    """One decorative PNG from effects/, scaled to a square box."""
+def bake_halo(sprite, color, spread=1.34, steps=5):
+    """A soft glow shaped like the artwork itself.
+
+    Built by stacking scaled, tinted copies of the sprite's own silhouette,
+    so it hugs whatever outline the gem actually has rather than being a
+    circle sitting behind a non-circular gem.
+    """
+    size = int(TILE * spread)
+    halo = pygame.Surface((size, size), pygame.SRCALPHA)
+    for i in range(steps, 0, -1):
+        f = i / steps
+        scale = 1.0 + (spread - 1.0) * f
+        ring = pygame.transform.smoothscale(
+            sprite, (max(1, int(TILE * scale)), max(1, int(TILE * scale))))
+        wash = pygame.Surface(ring.get_size(), pygame.SRCALPHA)
+        wash.fill(color + (255,))
+        ring.blit(wash, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+        ring.fill((255, 255, 255, int(38 * (1.0 - f) + 8)),
+                  special_flags=pygame.BLEND_RGBA_MULT)
+        halo.blit(ring, ring.get_rect(center=(size // 2, size // 2)),
+                  special_flags=pygame.BLEND_RGBA_ADD)
+    return halo
+
+
+def bake_glints(sprite, count=14, color=(255, 246, 214)):
+    """Pre-render a specular streak sweeping across the gem.
+
+    Each frame is a diagonal bright band masked to the sprite's own alpha, so
+    the shine only ever appears on the gem and follows its real shape.
+    """
+    w, h = sprite.get_size()
+    mask = pygame.mask.from_surface(sprite)
+    if mask.count() == 0:
+        return []
+    frames = []
+    band = max(6, int(w * 0.24))
+    travel = w + h + band * 2
+    for i in range(count):
+        pos = -band + (travel * i / (count - 1)) if count > 1 else 0
+        layer = pygame.Surface((w, h), pygame.SRCALPHA)
+        for k in range(band):
+            # triangular falloff gives a soft-edged streak
+            edge = 1.0 - abs(k - band / 2) / (band / 2)
+            if edge <= 0:
+                continue
+            alpha = int(210 * edge ** 1.6)
+            x = pos + k
+            pygame.draw.line(layer, color + (alpha,),
+                             (x, -1), (x - h, h + 1), 2)
+        shaped = mask.to_surface(setcolor=(255, 255, 255, 255),
+                                 unsetcolor=(0, 0, 0, 0))
+        shaped.blit(layer, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+        frames.append(shaped)
+    return frames
+
+
+def split_clusters(sheet, minimum=200):
+    """Cut a sheet into its separate blobs.
+
+    smoke.png is several puffs on one transparent sheet; slicing them apart
+    gives a set of distinct sprites to draw from, which looks far better than
+    scaling one image over and over.
+    """
+    try:
+        mask = pygame.mask.from_surface(sheet)
+        parts = mask.connected_components(minimum)
+    except (AttributeError, pygame.error):
+        return [sheet]
+    pieces = []
+    for part in parts:
+        rect = part.get_bounding_rects()
+        if not rect:
+            continue
+        box = rect[0]
+        for extra in rect[1:]:
+            box = box.union(extra)
+        if box.width < 4 or box.height < 4:
+            continue
+        pieces.append(sheet.subsurface(box).copy())
+    return pieces or [sheet]
+
+
+def load_still(name, size=None):
+    """One decorative PNG from effects/.
+
+    size=None keeps the artwork at its native size, which matters for sheets
+    that get sliced up afterwards - squashing them first would distort the
+    pieces.
+    """
     if not os.path.isdir(EFFECT_DIR):
         return None
     for filename in sorted(os.listdir(EFFECT_DIR)):
@@ -489,6 +605,8 @@ def load_still(name, size):
                     os.path.join(EFFECT_DIR, filename)).convert_alpha()
             except pygame.error:
                 return None
+            if size is None:
+                return image
             return pygame.transform.smoothscale(image, (size, size))
     return None
 
@@ -699,7 +817,20 @@ def plan_clear(g, runs, origin=()):
         if len(run) < 4:
             continue
         power = HYPER if len(run) >= 5 else FLAME
-        at = next((rc for rc in origin if rc in run), run[len(run) // 2])
+
+        # A spawn cell is excluded from the clear, so it must not be a gem
+        # that already carries a power - otherwise matching your own flame
+        # gem into a run of 4 quietly upgrades it instead of detonating it.
+        def plain(rc):
+            gem = g[rc[0]][rc[1]]
+            return gem is not None and gem.power == NORMAL
+
+        at = next((rc for rc in origin if rc in run and plain(rc)), None)
+        if at is None:
+            middle = sorted(run, key=lambda rc: abs(run.index(rc) - len(run) // 2))
+            at = next((rc for rc in middle if plain(rc)), None)
+        if at is None:                      # every gem in the run is special
+            at = next((rc for rc in origin if rc in run), run[len(run) // 2])
         if spawns.get(at, NORMAL) < power:
             spawns[at] = power
 
@@ -1101,6 +1232,99 @@ def stretch(surface, size):
     return pygame.transform.smoothscale(surface, (max(1, size[0]), max(1, size[1])))
 
 
+def fallback_background():
+    """A generated backdrop, used when backgrounds/ is empty.
+
+    Without this the chrome sits on a flat fill and reads as solid even though
+    its alpha is unchanged - which looks exactly like "transparency is broken
+    on this machine". A gradient makes the glass visible everywhere.
+    """
+    canvas = pygame.Surface((WIDTH, HEIGHT))
+    top, bottom = (14, 18, 38), (34, 26, 58)
+    for y in range(HEIGHT):
+        f = y / HEIGHT
+        canvas.fill(tuple(int(a + (b - a) * f) for a, b in zip(top, bottom)),
+                    (0, y, WIDTH, 1))
+    glow = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+    for i, radius in enumerate((420, 300, 190)):
+        pygame.draw.circle(glow, (70, 90, 190, 16 + i * 6),
+                           (int(WIDTH * 0.72), int(HEIGHT * 0.30)), radius)
+    canvas.blit(glow, (0, 0))
+    return canvas
+
+
+def describe_assets():
+    """Print exactly which folders were found and what is in them.
+
+    This exists because "it looks different on my other machine" is nearly
+    always a missing folder, and guessing at it wastes everyone's time.
+    """
+    print(f"running from : {app_dir()}")
+    if getattr(sys, "frozen", False):
+        print(f"bundled in   : {bundle_dir()}")
+    for label, folder, exts in (
+            ("gems", ASSET_DIR, (".png", ".jpg", ".jpeg", ".webp")),
+            ("soundeffects", SFX_DIR, AUDIO_EXTS),
+            ("music", MUSIC_DIR, AUDIO_EXTS),
+            ("backgrounds", BACKGROUND_DIR, (".png", ".jpg", ".jpeg", ".webp")),
+            ("effects", EFFECT_DIR, (".png", ".webp", ".gif")),
+            ("fonts", FONT_DIR, (".ttf", ".otf"))):
+        if not os.path.isdir(folder):
+            print(f"  {label:<13} MISSING   (looked in {folder})")
+            continue
+        n = sum(1 for f in os.listdir(folder)
+                if os.path.splitext(f)[1].lower() in exts)
+        print(f"  {label:<13} {n:3d} file(s)")
+    print()
+
+
+def load_title_art():
+    """The logo from title/. Kept at native size and scaled to the window."""
+    if not os.path.isdir(TITLE_DIR):
+        return None
+    for filename in sorted(os.listdir(TITLE_DIR)):
+        stem, ext = os.path.splitext(filename)
+        if ext.lower() not in (".png", ".webp"):
+            continue
+        if "background" in _norm(stem):       # that one is the backdrop
+            continue
+        try:
+            art = pygame.image.load(
+                os.path.join(TITLE_DIR, filename)).convert_alpha()
+        except pygame.error:
+            continue
+        target = int(WIDTH * 0.74)
+        w, h = art.get_size()
+        return pygame.transform.smoothscale(
+            art, (target, max(1, int(h * target / w))))
+    return None
+
+
+def load_title_background():
+    """title/TitleBackground.* - the backdrop behind the logo."""
+    if not os.path.isdir(TITLE_DIR):
+        return None
+    for filename in sorted(os.listdir(TITLE_DIR)):
+        stem, ext = os.path.splitext(filename)
+        if ext.lower() not in (".png", ".webp", ".jpg", ".jpeg"):
+            continue
+        if "background" not in _norm(stem):
+            continue
+        try:
+            art = pygame.image.load(os.path.join(TITLE_DIR, filename)).convert()
+        except pygame.error:
+            return None
+        w, h = art.get_size()
+        scale = max(WIDTH / w, HEIGHT / h)          # cover, never squashed
+        art = pygame.transform.smoothscale(
+            art, (int(w * scale + 0.5), int(h * scale + 0.5)))
+        canvas = pygame.Surface((WIDTH, HEIGHT))
+        canvas.blit(art, ((WIDTH - art.get_width()) // 2,
+                          (HEIGHT - art.get_height()) // 2))
+        return canvas
+    return None
+
+
 def load_backgrounds():
     """Photos from backgrounds/, scaled to cover the window.
 
@@ -1181,6 +1405,7 @@ class Audio:
         self.snd = {}
         self.playlist = []
         self.timed_playlist = []
+        self.title_playlist = []
         self.mode = ENDLESS
         self.playlist_started = False
         self.track = 0
@@ -1229,8 +1454,17 @@ class Audio:
             if os.path.isdir(path):
                 continue
             stem, ext = os.path.splitext(filename)
-            if ext.lower() in AUDIO_EXTS:
-                found.setdefault(_norm(stem), path)
+            if ext.lower() not in AUDIO_EXTS:
+                continue
+            key = _norm(stem)
+            found.setdefault(key, path)
+            # Also index the name with any trailing take/version number
+            # stripped, so "Whirlpool_1.wav" still answers to "Whirlpool"
+            # and "Explode 2.ogg" still answers to "Explode". Registered
+            # second, so an exact match always wins.
+            bare = key.rstrip("0123456789")
+            if bare and bare != key:
+                found.setdefault(bare, path)
         return found
 
     def fake_missing_cascades(self):
@@ -1276,6 +1510,9 @@ class Audio:
         self.playlist = [index[key] for key in sorted(index)]
         random.shuffle(self.playlist)
 
+        title_index = self.index_folder(TITLE_DIR)
+        self.title_playlist = [title_index[k] for k in sorted(title_index)]
+
         timed_dir = os.path.join(MUSIC_DIR, TIMED_MUSIC_SUBDIR)
         timed_index = self.index_folder(timed_dir)
         self.timed_playlist = [timed_index[key] for key in sorted(timed_index)]
@@ -1283,6 +1520,8 @@ class Audio:
 
         if not self.playlist:
             self.missing.append("music (nothing in music/)")
+        if not self.title_playlist:
+            self.missing.append("title music (nothing in title/)")
         if not self.timed_playlist:
             self.missing.append(f"timed music (nothing in {TIMED_MUSIC_SUBDIR}/)")
         if not self.playlist and not self.timed_playlist:
@@ -1290,11 +1529,13 @@ class Audio:
 
         pygame.mixer.music.set_volume(self.music_volume)
         pygame.mixer.music.set_endevent(MUSIC_END)
-        self.use_playlist(ENDLESS)
+        self.use_playlist(TITLE)
 
     def active_list(self):
-        """Timed mode falls back to the main playlist if the subfolder is
-        empty, so the game never goes silent."""
+        """Falls back to the main playlist if a set is empty, so the game
+        never goes silent."""
+        if self.mode == TITLE and self.title_playlist:
+            return self.title_playlist
         if self.mode == TIMED and self.timed_playlist:
             return self.timed_playlist
         return self.playlist
@@ -1388,6 +1629,7 @@ class Audio:
         a.snd = {}
         a.playlist = []
         a.timed_playlist = []
+        a.title_playlist = []
         a.mode = ENDLESS
         a.playlist_started = False
         a.track = 0
@@ -1395,14 +1637,18 @@ class Audio:
         a.missing = []
         return a
 
-    def play_match(self, cascade, special=False):
-        """One voice per clear: cascade tone if chaining, else match3/match4-5."""
+    def play_match(self, cascade, multi=False):
+        """One voice per clear.
+
+        multi means the single swap produced two or more separate runs at
+        once - an L or T shape, or a move that completed two lines.
+        """
         if not self.ok or self.muted:
             return
         if cascade >= 2 and self.snd.get(f"cascade{min(cascade, 6)}") is not None:
             self.play(f"cascade{min(cascade, 6)}")
-        elif special:
-            self.play("match45")
+        elif multi:
+            self.play("twomatch")
         else:
             self.play("match3")
 
@@ -1462,33 +1708,55 @@ class Audio:
 # --------------------------------------------------------------------------
 
 class Puff:
-    """One smoke sprite: drifts outward, swells and fades."""
+    """One smoke sprite: bursts outward, slows, swells, rises and fades.
 
-    LIFE = 0.85
-    __slots__ = ("image", "x", "y", "dx", "dy", "spin", "t")
+    Each puff picks its own sprite from the pieces of smoke.png, so a single
+    explosion is made of visibly different shapes rather than one image
+    repeated at different sizes.
+    """
 
-    def __init__(self, image, x, y):
+    __slots__ = ("image", "x", "y", "dx", "dy", "spin", "t", "life",
+                 "scale0", "scale1", "delay", "tint")
+
+    def __init__(self, image, x, y, angle=None, force=1.0):
         self.image = image
         self.x, self.y = x, y
-        angle = random.uniform(0, math.tau)
-        speed = random.uniform(16, 46)
+        angle = random.uniform(0, math.tau) if angle is None else angle
+        speed = random.uniform(70, 155) * force
         self.dx = math.cos(angle) * speed
-        self.dy = math.sin(angle) * speed - 14      # drifts up a little
-        self.spin = random.uniform(-70, 70)
+        self.dy = math.sin(angle) * speed * 0.78 - random.uniform(18, 46)
+        self.spin = random.uniform(-95, 95)
+        self.life = random.uniform(0.75, 1.25)
+        self.scale0 = random.uniform(0.16, 0.30) * force
+        self.scale1 = self.scale0 * random.uniform(2.6, 4.0)
+        self.delay = random.uniform(0.0, 0.14)     # staggered, not one clump
+        self.tint = random.randint(196, 255)
         self.t = 0.0
 
     def update(self, dt):
         self.t += dt
-        return self.t < self.LIFE
+        return self.t < self.life + self.delay
 
     def draw(self, screen):
-        progress = self.t / self.LIFE
-        scale = 0.55 + 0.85 * ease_out(progress)
-        image = pygame.transform.rotozoom(self.image, self.spin * progress, scale)
-        image.set_alpha(int(210 * (1.0 - progress) ** 1.5))
+        if self.t < self.delay:
+            return
+        p = clamp01((self.t - self.delay) / self.life)
+        # drag: fast burst that eases to a stop, rather than constant speed
+        travel = 1.0 - (1.0 - p) ** 2.4
+        rise = p * p * 26                       # smoke keeps lifting as it fades
+        scale = self.scale0 + (self.scale1 - self.scale0) * ease_out(p)
+        image = pygame.transform.rotozoom(self.image, self.spin * travel, scale)
+        if self.tint < 255:
+            shade = image.copy()
+            shade.fill((self.tint, self.tint, self.tint, 255),
+                       special_flags=pygame.BLEND_RGBA_MULT)
+            image = shade
+        # fade in briefly so it does not appear at full strength
+        alpha = 235 * min(1.0, p * 6.0) * (1.0 - p) ** 1.7
+        image.set_alpha(int(alpha))
         screen.blit(image, image.get_rect(center=(
-            int(self.x + self.dx * progress),
-            int(self.y + self.dy * progress))))
+            int(self.x + self.dx * travel),
+            int(self.y + self.dy * travel - rise))))
 
 
 class TimePop:
@@ -1513,6 +1781,62 @@ class TimePop:
         label.set_alpha(int(255 * (1.0 - ease_in_out(progress) ** 1.4)))
         screen.blit(label, label.get_rect(
             center=(self.x, self.y - int(46 * ease_out(progress)))))
+
+
+class FlyingGem:
+    """One gem hurled off the board when a level ends."""
+
+    __slots__ = ("image", "x", "y", "dx", "dy", "spin", "delay", "t")
+
+    @staticmethod
+    def crop(sprite):
+        """Trim to the gem's own opaque bounds.
+
+        The sprite is a full tile with the gem sitting inside it. Throwing the
+        whole tile carries whatever else is in that square - which reads as
+        the board tile flying off with the gem.
+        """
+        try:
+            rects = pygame.mask.from_surface(sprite).get_bounding_rects()
+        except (AttributeError, pygame.error):
+            return sprite
+        if not rects:
+            return sprite
+        box = rects[0]
+        for extra in rects[1:]:
+            box = box.union(extra)
+        box = box.inflate(2, 2).clip(sprite.get_rect())
+        return sprite.subsurface(box).copy() if box.width and box.height else sprite
+
+    def __init__(self, image, x, y, delay):
+        self.image = self.crop(image)
+        self.x, self.y = x, y
+        # thrown outward from the middle of the board, so the whole board
+        # scatters rather than everything drifting the same way
+        cx, cy = BOARD_X + BOARD_W / 2, BOARD_Y + BOARD_H / 2
+        angle = math.atan2(y - cy, x - cx) + random.uniform(-0.5, 0.5)
+        speed = random.uniform(620, 1150)
+        self.dx = math.cos(angle) * speed
+        self.dy = math.sin(angle) * speed - random.uniform(120, 300)
+        self.spin = random.uniform(-620, 620)
+        self.delay = delay
+        self.t = 0.0
+
+    def update(self, dt):
+        self.t += dt
+
+    def draw(self, screen):
+        p = self.t - self.delay
+        if p <= 0:
+            screen.blit(self.image, self.image.get_rect(
+                center=(int(self.x), int(self.y))))
+            return
+        image = pygame.transform.rotozoom(self.image, self.spin * p, 1.0)
+        fade = max(0, int(255 * (1.0 - clamp01(p / 0.75))))
+        image.set_alpha(fade)
+        screen.blit(image, image.get_rect(center=(
+            int(self.x + self.dx * p),
+            int(self.y + self.dy * p + 900 * p * p))))   # gravity
 
 
 class Button:
@@ -1604,12 +1928,20 @@ class Game:
         self.normal, self.flame, self.hyper, _ = sprites
         self.anims = effects or {}
         self.backgrounds = backgrounds or []
-        self.fire = load_still(FIRE_ASSET, int(TILE * 1.30))
-        self.smoke = load_still(SMOKE_ASSET, int(TILE * 1.55))
+        # flame gems: a glow shaped like the gem, and a travelling glint
+        self.flame_halo = [bake_halo(spr, (255, 150, 46)) for spr in self.flame]
+        self.flame_glint = [bake_glints(spr) for spr in self.flame]
+        self.banner = self.build_banner()
+        sheet = load_still(SMOKE_ASSET)
+        self.smoke = split_clusters(sheet) if sheet is not None else []
         self.hyper_glow = bake_glow(self.hyper, (255, 255, 255, 255))
         self.puffs = []
         self.effects = []
         self.skin = skin or {}
+        self.on_title = True
+        self.title_ready = False
+        self.title_art = self.build_title()
+        self.title_bg = load_title_background()
         self.board_bg = self.build_board_backdrop()
         self.panel_bg = translucent((PANEL_W, PANEL_H), PANEL_FILL, PANEL_EDGE, 14)
         self.menu_bg = translucent(self.menu_rect().size, PANEL_FILL,
@@ -1623,7 +1955,93 @@ class Game:
         self.font = load_font(2)                   # 14px
         self.font_small = load_font(2)
         self.build_widgets()
+        self.build_title_widgets()
         self.reset()
+
+    def build_title(self):
+        """Title art with a soft dark halo, so it reads on any background."""
+        art = load_title_art()
+        if art is None:
+            return None
+        pad = 16
+        out = pygame.Surface((art.get_width() + pad * 2,
+                              art.get_height() + pad * 2), pygame.SRCALPHA)
+        shade = art.copy()
+        shade.fill((0, 0, 0, 255), special_flags=pygame.BLEND_RGBA_MULT)
+        for radius in (12, 7, 3):
+            blur = pygame.transform.smoothscale(
+                shade, (art.get_width() + radius * 2, art.get_height() + radius * 2))
+            blur.set_alpha(64)
+            out.blit(blur, (pad - radius, pad - radius))
+        out.blit(art, (pad, pad))
+        return out
+
+    def build_title_widgets(self):
+        cx = WIDTH // 2
+        w, h = 300, 62
+        self.title_buttons = [
+            Button((cx - w // 2, 452, w, h), "ENDLESS",
+                   lambda: self.start_game(ENDLESS), accent=GOLD),
+            Button((cx - w // 2, 452 + h + 16, w, h), "TIMED",
+                   lambda: self.start_game(TIMED), accent=(126, 216, 150)),
+        ]
+
+    def start_game(self, mode):
+        """Leave the title screen and begin a run in the chosen mode."""
+        self.on_title = False
+        self.title_ready = False
+        self.audio.play("menuclick")
+        self.reset(mode)          # reset() swaps the music to the mode's list
+
+    def draw_title(self, screen):
+        photo = self.title_bg or (self.backgrounds[0] if self.backgrounds else None)
+        if photo is None:
+            screen.fill(BG)
+        else:
+            screen.blit(photo, (0, 0))
+        # lighter veil when it is the purpose-made title art
+        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        veil.fill((6, 8, 18, 60 if self.title_bg else 120))
+        screen.blit(veil, (0, 0))
+
+        art = self.title_art
+        if art is not None:
+            # a slow bob plus a gentle brightness shimmer
+            bob = int(6 * math.sin(self.time * 1.5))
+            glow = 0.5 + 0.5 * math.sin(self.time * 2.1)
+            # The artwork is white, so a white glow on white letters is
+            # invisible. A COLOURED halo that drifts through the spectrum
+            # reads clearly and suits the name.
+            hue = (self.time * 0.11) % 1.0
+            for i, spread in enumerate((1.09, 1.05)):
+                shade = colorsys.hsv_to_rgb((hue + i * 0.13) % 1.0, 0.75, 1.0)
+                halo = pygame.transform.smoothscale(
+                    art, (int(art.get_width() * spread),
+                          int(art.get_height() * spread)))
+                halo.fill(tuple(int(c * 255) for c in shade)
+                          + (int((70 + 95 * glow) * (1.0 - i * 0.35)),),
+                          special_flags=pygame.BLEND_RGBA_MULT)
+                screen.blit(halo, halo.get_rect(center=(WIDTH // 2, 148 + bob)),
+                            special_flags=pygame.BLEND_RGBA_ADD)
+            screen.blit(art, art.get_rect(center=(WIDTH // 2, 148 + bob)))
+        else:
+            big = self.font_huge.render("PRISMAC", True, TEXT)
+            screen.blit(big, big.get_rect(center=(WIDTH // 2, 148)))
+
+        if self.title_ready:
+            label = self.font_big.render("CHOOSE A MODE", True, DIM)
+            screen.blit(label, label.get_rect(center=(WIDTH // 2, 410)))
+            for button in self.title_buttons:
+                button.draw(screen, self.font)
+        else:
+            pulse = 0.5 + 0.5 * math.sin(self.time * 3.0)
+            prompt = self.font_big.render("CLICK TO START", True, TEXT)
+            prompt.set_alpha(int(120 + 135 * pulse))
+            screen.blit(prompt, prompt.get_rect(center=(WIDTH // 2, 470)))
+
+        credit = self.font_small.render(CREDITS, True, DIM)
+        screen.blit(credit, (WIDTH - 20 - credit.get_width(),
+                             HEIGHT - 20 - credit.get_height()))
 
     def reset(self, mode=None):
         if mode is not None:
@@ -1639,13 +2057,20 @@ class Game:
         self.hint_left = 0.0
         self.effects = []
         self.go_left = 0.0
-        self.flash = 0.0
+        self.flyers = []
+        self.multi_run = False
+        self.shake = 0.0
+        self.shake_t = 0.0
+        self.frame = None
         self.note = ""
         self.time_left = TIMED_SECONDS
         self.over = False
         self.time_pops = []          # floating "+3s" labels
         self.puffs = []              # smoke left by flame gems
-        self.audio.use_playlist(self.mode)
+        # While the title screen is up its own track keeps playing; the mode
+        # playlist only takes over once a game actually starts.
+        if not self.on_title:
+            self.audio.use_playlist(self.mode)
         self.new_board()
 
     def new_board(self):
@@ -1676,6 +2101,32 @@ class Game:
         # one GemFalling per Nth column, fired as that column lands
         self.intro_cues = [c * INTRO_STAGGER
                            for c in range(0, COLS, INTRO_SOUND_EVERY)]
+
+    @staticmethod
+    def build_banner():
+        """The LEVEL UP artwork, sized to the board and given a soft dark
+        halo so white lettering still reads on a pale background."""
+        art = load_still(BANNER_ASSET)
+        if art is None:
+            return None
+        target = int(BOARD_W * 0.82)
+        w, h = art.get_size()
+        art = pygame.transform.smoothscale(
+            art, (target, max(1, int(h * target / w))))
+
+        pad = 14
+        out = pygame.Surface((art.get_width() + pad * 2,
+                              art.get_height() + pad * 2), pygame.SRCALPHA)
+        shadow = art.copy()
+        shadow.fill((0, 0, 0, 255), special_flags=pygame.BLEND_RGBA_MULT)
+        for radius in (10, 6, 3):
+            blur = pygame.transform.smoothscale(
+                shadow, (art.get_width() + radius * 2,
+                         art.get_height() + radius * 2))
+            blur.set_alpha(70)
+            out.blit(blur, (pad - radius, pad - radius))
+        out.blit(art, (pad, pad))
+        return out
 
     def skinned(self, name, size):
         """Scaled skin image, or None if that file was not supplied."""
@@ -1710,6 +2161,22 @@ class Game:
 
     # -- effects ----------------------------------------------------------
 
+    def add_shake(self, amount):
+        """Kick the camera. Amounts add up but are capped, so a huge cascade
+        does not turn into an earthquake."""
+        self.shake = min(SHAKE_MAX, self.shake + amount)
+
+    def shake_offset(self):
+        """Decaying wobble on two different frequencies, so it does not read
+        as a clean sine wave."""
+        if self.shake <= 0.15:
+            return (0, 0)
+        a = self.shake
+        return (int(math.sin(self.shake_t * 46.0) * a
+                    + math.sin(self.shake_t * 71.0) * a * 0.4),
+                int(math.cos(self.shake_t * 53.0) * a * 0.8
+                    + math.cos(self.shake_t * 89.0) * a * 0.3))
+
     def spawn_effect(self, name, r, c):
         """Play an animation centred on a board cell, if that effect exists."""
         anim = self.anims.get(name)
@@ -1719,16 +2186,26 @@ class Game:
                                    BOARD_X + int((c + 0.5) * TILE),
                                    BOARD_Y + int((r + 0.5) * TILE)))
 
-    def spawn_smoke(self, r, c, count=5):
-        """A little cloud where a flame gem went off."""
-        if self.smoke is None:
-            return
-        if len(self.puffs) > MAX_EFFECTS:
+    def spawn_smoke(self, r, c, count=7):
+        """A cloud where a flame gem went off.
+
+        Puffs are thrown out on an even spread of angles with a random wobble,
+        so the burst reads as a ring rather than a random scatter, and each
+        one draws a different piece of smoke.png.
+        """
+        if not self.smoke or len(self.puffs) > MAX_EFFECTS:
             return
         x = BOARD_X + int((c + 0.5) * TILE)
         y = BOARD_Y + int((r + 0.5) * TILE)
-        for _ in range(count):
-            self.puffs.append(Puff(self.smoke, x, y))
+        for i in range(count):
+            angle = math.tau * i / count + random.uniform(-0.45, 0.45)
+            self.puffs.append(Puff(random.choice(self.smoke), x, y,
+                                   angle=angle,
+                                   force=random.uniform(0.65, 1.15)))
+        # one slow fat puff in the middle, so the centre is not hollow
+        self.puffs.append(Puff(max(self.smoke, key=lambda s: s.get_width()),
+                               x, y, angle=random.uniform(0, math.tau),
+                               force=0.28))
 
     def spawn_effect_at(self, name, x, y):
         anim = self.anims.get(name)
@@ -1743,7 +2220,6 @@ class Game:
         self.hint = None
         self.menu_open = False
         self.note = ""
-        self.flash = 0.5
         self.audio.play("gameover")
 
     def levelup_pause(self):
@@ -1762,17 +2238,72 @@ class Game:
         return max(0.0, min(1.0, earned / self.level_target()))
 
     def begin_levelup(self):
+        """Throw every gem off the board, then hold a banner, then refill.
+
+        Sequence: gems fly off -> LEVEL banner in the middle of the board ->
+        a beat -> the new board rains in -> a beat -> GO!
+        """
         self.level_floor += self.level_target()   # overflow carries forward
         self.level += 1
-        self.state = "levelup"
-        self.t = 0.0
         self.sel = None
+        self.press = None
         self.pair = None
-        self.flash = 0.9
-        self.note = f"LEVEL {self.level}"
-        self.spawn_effect_at("levelup",
-                             BOARD_X + BOARD_W // 2, BOARD_Y + BOARD_H // 2)
+        self.matched = set()
+        self.spawns = {}
+        self.falls = {}
+        self.note = ""
+
+        self.flyers = []
+        for r in range(ROWS):
+            for c in range(COLS):
+                gem = self.grid[r][c]
+                if gem is None:
+                    continue
+                # stagger by distance from the centre so it ripples outward
+                dr, dc = r - (ROWS - 1) / 2, c - (COLS - 1) / 2
+                delay = math.hypot(dr, dc) / max(ROWS, COLS) * 0.42
+                self.flyers.append(FlyingGem(
+                    self.sprite_for(gem),
+                    BOARD_X + (c + 0.5) * TILE,
+                    BOARD_Y + (r + 0.5) * TILE,
+                    delay + random.uniform(0.0, 0.06)))
+
+        # Empty the board immediately. Otherwise draw_scene keeps drawing the
+        # gems in place while their copies fly away, so the board looks full
+        # right through the transition.
+        self.grid = [[None] * COLS for _ in range(ROWS)]
+
+        self.state = "flyoff"
+        self.t = 0.0
+        # No camera shake here: it moves the board and panel with it, which
+        # reads as the board itself flying away. Only the gems should move.
+        self.audio.play("flyoff")
+
+    def begin_banner(self):
+        self.state = "banner"
+        self.t = 0.0
+        self.flyers = []
         self.audio.play("levelup")
+
+    def banner_length(self):
+        return BANNER_IN + BANNER_HOLD + BANNER_OUT + DROP_PAUSE
+
+    def banner_pose(self):
+        """(x_offset, alpha) for the LEVEL banner.
+
+        Fixed size throughout: it slides in, holds, then flies off to the
+        side, the same way the GO! card behaves. No scaling.
+        """
+        t = self.t
+        if t < BANNER_IN:
+            p = ease_out(clamp01(t / BANNER_IN))
+            return int(-WIDTH * (1.0 - p)), int(255 * clamp01(t / (BANNER_IN * 0.6)))
+        t -= BANNER_IN
+        if t < BANNER_HOLD:
+            return 0, 255
+        t -= BANNER_HOLD
+        p = clamp01(t / BANNER_OUT)
+        return int(WIDTH * ease_in_out(p)), int(255 * (1.0 - clamp01(p * 1.4)))
 
     def secret_shuffle(self):
         """Hidden reshuffle. New board, score and level untouched.
@@ -1783,7 +2314,6 @@ class Game:
         if self.over or self.state != "idle":
             return False
         self.grid = new_grid(bonuses=self.timed)
-        self.flash = 0.35
         self.audio.play("shuffle")
         self.begin_intro()          # rains the new board in like any other
         return True
@@ -1878,6 +2408,12 @@ class Game:
 
     def widgets_at(self, pos):
         """Whatever interactive thing is under the cursor, overlays first."""
+        if self.on_title:
+            if self.title_ready:
+                for button in self.title_buttons:
+                    if button.hit(pos):
+                        return button
+            return None
         if self.over:
             for button in self.over_buttons:
                 if button.hit(pos):
@@ -1897,6 +2433,10 @@ class Game:
         return None
 
     def on_down(self, pos):
+        if self.on_title and not self.title_ready:
+            self.title_ready = True        # first click reveals the modes
+            self.audio.play("menuclick")
+            return
         hit = self.widgets_at(pos)
         if isinstance(hit, Slider):
             self.dragging = hit
@@ -1906,6 +2446,8 @@ class Game:
         if isinstance(hit, Button):
             hit.down = True
             self.audio.play("menuclick")
+            return
+        if self.on_title:
             return
         if self.over:
             return                     # nothing but those two buttons is live
@@ -1921,6 +2463,10 @@ class Game:
         self.press = cell
         if cell is None:
             self.sel = None
+        elif cell == self.sel:
+            self.sel = None            # click the selected gem again to drop it
+            self.press = None          # ...and do not let mouse-up re-select
+            self.audio.play("select")
         elif self.sel is not None and adjacent(self.sel, cell):
             self.begin_swap(self.sel, cell)
         else:
@@ -1931,13 +2477,16 @@ class Game:
         if self.dragging is not None:
             self.dragging.set_from(pos)
             return
-        if self.over:
+        if self.on_title:
+            active = self.title_buttons if self.title_ready else []
+        elif self.over:
             active = self.over_buttons
         elif self.menu_open:
             active = self.menu_buttons
         else:
             active = self.buttons
-        for button in self.buttons + self.menu_buttons + self.over_buttons:
+        for button in (self.buttons + self.menu_buttons + self.over_buttons
+                       + self.title_buttons):
             button.hover = button in active and button.hit(pos)
 
     def on_up(self, pos):
@@ -1946,7 +2495,8 @@ class Game:
             return
 
         fired = None
-        for button in self.buttons + self.menu_buttons + self.over_buttons:
+        for button in (self.buttons + self.menu_buttons + self.over_buttons
+                       + self.title_buttons):
             if button.down and button.hit(pos):
                 fired = button
             button.down = False
@@ -1978,10 +2528,16 @@ class Game:
 
     def update(self, dt):
         self.time += dt
+        if self.on_title:
+            return
         if self.effects:
             self.effects = [e for e in self.effects if e.update(dt)]
         if self.go_left > 0:
             self.go_left = max(0.0, self.go_left - dt)
+        if self.shake > 0:
+            self.shake_t += dt
+            self.shake = max(0.0, self.shake - self.shake * SHAKE_DECAY * dt
+                             - 0.6 * dt)
         if self.time_pops:
             self.time_pops = [p for p in self.time_pops if p.update(dt)]
         if self.puffs:
@@ -1990,7 +2546,7 @@ class Game:
         # The clock only runs while the board is actually playable. Opening
         # the menu pauses it - otherwise adjusting the volume costs you time.
         if (self.timed and not self.over and not self.menu_open
-                and self.state not in ("intro", "levelup")):
+                and self.state not in PAUSED_STATES):
             self.time_left -= dt
             if self.time_left <= 0:
                 self.time_left = 0.0
@@ -1999,13 +2555,35 @@ class Game:
             self.hint_left = max(0.0, self.hint_left - dt)
             if self.hint_left == 0:
                 self.hint = None
-        self.flash = max(0.0, self.flash - dt)
         for cell in list(self.pops):
             self.pops[cell] -= dt
             if self.pops[cell] <= 0:
                 del self.pops[cell]
 
         if self.state == "idle":
+            return
+
+        if self.state == "flyoff":
+            self.t += dt
+            for flyer in self.flyers:
+                flyer.update(dt)
+            if self.t >= FLYOFF_TIME:
+                self.begin_banner()
+            return
+
+        if self.state == "banner":
+            self.t += dt
+            if self.t >= self.banner_length():
+                self.new_board()          # rains the fresh gems in
+            return
+
+        if self.state == "settling":
+            self.t += dt
+            if self.t >= GO_PAUSE:
+                self.state = "idle"
+                self.t = 0.0
+                self.go_left = GO_TIME
+                self.audio.play("go")
             return
 
         dur = {"swap": SWAP_TIME, "swapback": SWAP_TIME,
@@ -2026,9 +2604,8 @@ class Game:
 
         if self.state == "intro":
             self.note = ""
-            self.go_left = GO_TIME
-            self.audio.play("go")
-            self.state = "idle"
+            self.state = "settling"      # a beat before GO!
+            self.t = 0.0
         elif self.state == "levelup":
             self.new_board()
         elif self.state == "swap":
@@ -2043,6 +2620,7 @@ class Game:
             runs = find_runs(self.grid)
             if runs:
                 self.cascade += 1
+                self.multi_run = False
                 self.begin_clear(*plan_clear(self.grid, runs))
             else:
                 self.settle()
@@ -2059,7 +2637,6 @@ class Game:
             self.cascade = 1
             self.begin_clear(hyper_targets(self.grid, hyper, other), {})
             self.note = "BOARD WIPE!" if both else "HYPERCUBE!"
-            self.flash = 0.5 if both else 0.25
             self.spawn_effect("hyper", *hyper)
             self.audio.play("hyper")
             return
@@ -2068,6 +2645,9 @@ class Game:
         runs = find_runs(self.grid)
         if runs:
             self.cascade = 1
+            # two or more separate runs from one move: L/T shapes, or a swap
+            # that completes two lines at once
+            self.multi_run = len(runs) >= 2
             self.begin_clear(*plan_clear(self.grid, runs, origin=(a, b)))
         else:
             self.apply_swap()          # undo the data change
@@ -2111,7 +2691,9 @@ class Game:
             gained += HYPER_BONUS if power == HYPER else FLAME_BONUS
         self.score += gained
 
-        self.audio.play_match(self.cascade, bool(spawns))
+        self.audio.play_match(self.cascade, self.multi_run)
+        for power in spawns.values():
+            self.audio.play("hypermade" if power == HYPER else "flamemade")
         if any(self.grid[r][c] is not None and self.grid[r][c].power == FLAME
                for r, c in cells):
             self.audio.play("explode")
@@ -2148,7 +2730,6 @@ class Game:
         if not has_move(self.grid):
             self.grid = new_grid()
             self.note = "no moves - reshuffled"
-            self.flash = 0.6
             self.audio.play("shuffle")
         self.state = "idle"
 
@@ -2165,19 +2746,16 @@ class Game:
         """Whatever sits *under* a special gem: fire, or the power-gem halo."""
         cx, cy = int(x + TILE / 2), int(y + TILE / 2)
 
-        if gem.power == FLAME and self.fire is not None:
-            # two copies at different speeds, so the flame breathes and sways
-            # instead of just pulsing on the spot
-            for phase, base, sway in ((0.0, 1.00, 4.0), (1.9, 0.86, -2.6)):
-                t = self.time * 2.3 + phase + (cx + cy) * 0.01
-                scale = base + 0.10 * math.sin(t) + 0.045 * math.sin(t * 2.7)
-                image = pygame.transform.rotozoom(
-                    self.fire, 3.5 * math.sin(t * 0.8), scale)
-                image.set_alpha(150 + int(70 * (0.5 + 0.5 * math.sin(t * 1.3))))
-                screen.blit(image, image.get_rect(
-                    center=(cx + int(sway * math.sin(t * 0.9)),
-                            cy - int(3 + 3 * math.sin(t)))),
-                    special_flags=pygame.BLEND_RGBA_ADD)
+        if gem.power == FLAME:
+            halo = self.flame_halo[gem.kind]
+            # two offset breathing rates so it never looks like a metronome
+            t = self.time * 2.0 + (cx * 0.021 + cy * 0.017)
+            pulse = 0.5 + 0.5 * math.sin(t)
+            swell = 0.94 + 0.09 * pulse + 0.03 * math.sin(t * 2.3)
+            image = pygame.transform.rotozoom(halo, 0, swell)
+            image.set_alpha(74 + int(66 * pulse))
+            screen.blit(image, image.get_rect(center=(cx, cy)),
+                        special_flags=pygame.BLEND_RGBA_ADD)
 
         elif gem.power == HYPER:
             pulse = 0.5 + 0.5 * math.sin(self.time * 3.2)
@@ -2186,6 +2764,32 @@ class Game:
             image.set_alpha(150 + int(90 * pulse))
             screen.blit(image, image.get_rect(center=(cx, cy)),
                         special_flags=pygame.BLEND_RGBA_ADD)
+
+    def draw_glint(self, screen, gem, x, y):
+        """Specular sweep across a flame gem, on a per-gem cycle.
+
+        Each gem gets its own phase from its board position, so a cluster of
+        flame gems does not glint in unison.
+        """
+        if gem.power != FLAME:
+            return
+        frames = self.flame_glint[gem.kind]
+        if not frames:
+            return
+        phase = (x * 0.013 + y * 0.019) % 1.0
+        cycle = (self.time / GLINT_PERIOD + phase) % 1.0
+        sweep = cycle / GLINT_SWEEP
+        if sweep >= 1.0:
+            return                      # resting between sweeps
+        index = min(len(frames) - 1, int(sweep * len(frames)))
+        frame = frames[index]
+        # fade in and out so the streak does not pop at either end
+        edge = math.sin(sweep * math.pi)
+        frame = frame.copy()
+        frame.fill((255, 255, 255, int(235 * edge)),
+                   special_flags=pygame.BLEND_RGBA_MULT)
+        screen.blit(frame, (int(x), int(y)),
+                    special_flags=pygame.BLEND_RGBA_ADD)
 
     def gem_draw_info(self, r, c):
         """Returns (x, y, scale) for the gem at r,c."""
@@ -2283,16 +2887,19 @@ class Game:
                         (x, PANEL_Y + 116))
             screen.blit(self.font_score.render(f"{secs // 60}:{secs % 60:02d}",
                                                True, color), (x, PANEL_Y + 138))
-            self.bar(screen, x, PANEL_Y + 184, width, 10,
-                     self.time_left / TIMED_MAX,
-                     (232, 96, 96) if low else (126, 216, 150))
+            screen.blit(self.font_small.render(f"LEVEL {self.level}", True, DIM),
+                        (x, PANEL_Y + 182))
         else:
             screen.blit(self.font_small.render("LEVEL", True, DIM),
                         (x, PANEL_Y + 116))
             screen.blit(self.font_score.render(str(self.level), True, TEXT),
                         (x, PANEL_Y + 138))
-            self.bar(screen, x, PANEL_Y + 184, width, 10,
-                     self.level_progress(), GOLD)
+
+        # The bar always shows progress toward the next level. In timed mode
+        # the clock has its own readout above, so mirroring it here left no
+        # indication of how close the next level was.
+        self.bar(screen, x, PANEL_Y + (200 if self.timed else 184), width, 10,
+                 self.level_progress(), GOLD)
 
         mode = self.font_small.render("TIMED" if self.timed else "ENDLESS",
                                       True, DIM)
@@ -2437,11 +3044,63 @@ class Game:
                              center[1] - banner.get_height() // 2))
 
     def draw(self, screen):
-        photo = self.background_for_level()
-        if photo is None:
-            screen.fill(BG)
+        if self.on_title:
+            self.draw_title(screen)
+            return
+        offset = self.shake_offset()
+        if offset == (0, 0):
+            target = screen
         else:
-            screen.blit(photo, (0, 0))
+            if self.frame is None:
+                self.frame = pygame.Surface((WIDTH, HEIGHT))
+            target = self.frame
+
+        if self.state in ("flyoff", "banner"):
+            self.draw_transition(target)
+        else:
+            self.draw_scene(target)
+
+        if target is not screen:
+            # Blow the frame up just enough that the shake offset can never
+            # slide a bare edge into view.
+            pad = SHAKE_MAX + 2
+            big = pygame.transform.smoothscale(
+                target, (WIDTH + pad * 2, HEIGHT + pad * 2))
+            screen.blit(big, (offset[0] - pad, offset[1] - pad))
+
+    def draw_transition(self, screen):
+        """Gems flying off, then the LEVEL banner over an empty board."""
+        self.draw_scene(screen)          # background, panel, empty board
+        if self.state == "flyoff":
+            for flyer in self.flyers:
+                flyer.draw(screen)
+            return
+
+        dx, alpha = self.banner_pose()
+        alpha = max(0, min(255, alpha))
+        cx = BOARD_X + BOARD_W // 2 + dx
+        cy = BOARD_Y + BOARD_H // 2
+        image = self.banner
+        if image is None:
+            image = self.font_huge.render("LEVEL UP", True, TEXT)
+        shown = image.copy()
+        shown.set_alpha(alpha)
+        screen.blit(shown, shown.get_rect(center=(cx, cy)))
+
+        label = self.font_score.render(f"LEVEL {self.level}", True, TEXT)
+        label.set_alpha(alpha)
+        screen.blit(label, label.get_rect(
+            center=(cx, cy + image.get_height() // 2 + 26)))
+
+    def draw_scene(self, screen, background=True):
+        if not background:
+            screen.fill((0, 0, 0, 0))       # UI only, on transparency
+        else:
+            photo = self.background_for_level()
+            if photo is None:
+                screen.fill(BG)
+            else:
+                screen.blit(photo, (0, 0))
         self.draw_panel(screen)
 
         screen.blit(self.board_bg, (BOARD_X, BOARD_Y))
@@ -2482,14 +3141,9 @@ class Game:
             pop.draw(screen, self.font_big)
         screen.set_clip(clip)
         self.draw_hint(screen)
-
-        if self.flash > 0:
-            veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-            veil.fill((255, 255, 255, int(90 * self.flash)))
-            screen.blit(veil, (0, 0))
-
         if self.go_left > 0:
             self.draw_go(screen)
+
         if self.state == "levelup":
             self.draw_levelup(screen)
         if self.menu_open:
@@ -2523,7 +3177,7 @@ def main():
     audio.report()
 
     effects, effect_report = build_effects()
-    for label, name in (("fire", FIRE_ASSET), ("smoke", SMOKE_ASSET)):
+    for label, name in (("smoke", SMOKE_ASSET),):
         found = load_still(name, TILE) is not None
         effect_report.append(
             f"   {label:<9} {'<-' if found else '!!'} "
@@ -2535,7 +3189,13 @@ def main():
     elif os.path.isdir(EFFECT_DIR):
         print(f"No animations found in {EFFECT_DIR}\n")
 
+    describe_assets()
+
     backgrounds = load_backgrounds()
+    if not backgrounds:
+        print("No backgrounds found - using a generated one so the "
+              "translucent UI still reads.\n")
+        backgrounds = [fallback_background()]
     if backgrounds:
         print(f"{len(backgrounds)} backgrounds loaded, one per level\n")
     elif os.path.isdir(BACKGROUND_DIR):
