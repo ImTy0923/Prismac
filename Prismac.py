@@ -3155,7 +3155,7 @@ class Game:
             screen.blit(big, big.get_rect(center=(WIDTH // 2, 148)))
 
         if self.title_ready:
-            label = self.font_big.render("CHOOSE A MODE", True, DIM)
+            label = self.font_big.render("CHOOSE A MODE", True, (255,255,255))
             # sits clear above the first row of buttons (y=396)
             screen.blit(label, label.get_rect(center=(WIDTH // 2, 362)))
             for button in self.title_buttons:
