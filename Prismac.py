@@ -112,21 +112,21 @@ SHAPES, EXTRAS, CHAOS = "shapes", "extras", "chaos"
 
 # Extras: modifiers the player can stack. Each is (key, label, blurb).
 EXTRA_DEFS = (
-    ("zen",     "ZEN",            "no clock, no score"),
-    ("mono",    "MONO",           "every gem the same colour"),
-    ("boom",    "EXPLOSIVES",     "explosives and rainbows spawn freely"),
-    ("lock",    "COLOUR LOCK",    "one colour scores, swaps every 10s"),
-    ("chaos",   "CHAOS",          "bombs and rocks in the mix"),
+    ("zen",     "ZEN",            "No Clock/Score"),
+    ("mono",    "MONO",           "Black & White"),
+    ("boom",    "EXPLOSIVES",     "Explosive Gems Spawn Freely"),
+    ("lock",    "COLOUR LOCK",    "One color scores (Swaps every 10s)"),
+    ("chaos",   "CHAOS",          "???"),
 )
 LOCK_SECONDS = 10.0
 
 # graphics toggles, both on by default and switchable from the title menu
 SETTING_DEFS = (
-    ("fullscreen",  "FULLSCREEN",   "fill the screen, letterboxed"),
-    ("backgrounds", "BACKGROUNDS",  "show the level artwork"),
-    ("smooth",      "SMOOTH ANIMATION", "off = no bounce or wobble"),
-    ("shake",     "CAMERA SHAKE",        "screen kick on big events"),
-    ("particles", "BACKGROUND PARTICLES", "drifting motes behind the board"),
+    ("fullscreen",  "FULLSCREEN",   "Fills Screen to Aspect Ratio"),
+    ("backgrounds", "BACKGROUNDS",  "Show Level Artwork"),
+    ("smooth",      "SMOOTH ANIMATION", "Bounce and Wobble Effect"),
+    ("shake",     "CAMERA SHAKE",        "Screen Shakes on Explosions"),
+    ("particles", "BACKGROUND PARTICLES", "Tiny Particle Effects"),
 )
 PARTICLE_COUNT = 46
 DEV_CLICKS = 5             # taps on the logo to open developer mode
