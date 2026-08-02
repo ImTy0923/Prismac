@@ -2843,6 +2843,7 @@ class Game:
         self.frame = None
         self.note = ""
         self.shape_cells = None
+        self.shape_name = None
         self.time_left = TIMED_SECONDS
         self.lock_kind = random.randrange(N_TYPES)
         self.lock_left = LOCK_SECONDS
@@ -2868,16 +2869,21 @@ class Game:
         return grid
 
     def pick_shape(self):
-        """A new silhouette for the current Shapes level."""
-        self.shape_cells = shape_mask(random.choice(SHAPE_MASKS))
+        """A new silhouette for the current Shapes level.
+
+        Avoids repeating the shape you just played, so consecutive levels
+        always look different.
+        """
+        choices = [n for n in SHAPE_MASKS if n != getattr(self, "shape_name", None)]
+        self.shape_name = random.choice(choices or list(SHAPE_MASKS))
+        self.shape_cells = shape_mask(self.shape_name)
 
     def new_board(self):
         """Fresh grid for the current level, rained in from above."""
         if self.mode == SHAPES:
-            # the silhouette belongs to the run, not the level - regenerating
-            # it here changed the board shape on every level up
-            if self.shape_cells is None:
-                self.pick_shape()
+            # A new level means a new silhouette; it only stays fixed for the
+            # duration of one level, including any reshuffle within it.
+            self.pick_shape()
             self.grid = new_shapes_grid(bonuses=self.timed,
                                         mask=self.shape_cells)
         else:
