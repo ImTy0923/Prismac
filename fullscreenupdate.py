@@ -120,6 +120,7 @@ LOCK_SECONDS = 10.0
 
 # graphics toggles, both on by default and switchable from the title menu
 SETTING_DEFS = (
+    ("fullscreen", "FULLSCREEN",  "fill the screen, letterboxed"),
     ("shake",     "CAMERA SHAKE",        "screen kick on big events"),
     ("particles", "BACKGROUND PARTICLES", "drifting motes behind the board"),
 )
@@ -2439,6 +2440,7 @@ class Game:
         self.extras_note = ""
         self.settings = {k: True for k, _, _ in SETTING_DEFS}
         self.settings_open = False
+        self.display = None
         self.motes = [[random.uniform(0, WIDTH), random.uniform(0, HEIGHT),
                        random.uniform(1.0, 2.8), random.uniform(-11, -3),
                        random.uniform(0.25, 0.7)]
@@ -2668,6 +2670,10 @@ class Game:
         self.audio.play("menuclick")
 
     def toggle_setting(self, key):
+        if key == "fullscreen" and self.display is not None:
+            self.settings[key] = self.display.toggle().get_flags() & pygame.FULLSCREEN != 0
+            self.audio.play("menuclick")
+            return
         self.settings[key] = not self.settings.get(key, True)
         if key == "shake":
             self.shake = 0.0
@@ -2717,16 +2723,18 @@ class Game:
         self.audio.play("menuclick")
         self.reset(mode)          # reset() swaps the music to the mode's list
 
-    def draw_title(self, screen):
-        photo = self.title_bg or (self.backgrounds[0] if self.backgrounds else None)
-        if photo is None:
-            screen.fill(BG)
-        else:
-            screen.blit(photo, (0, 0))
-        # lighter veil when it is the purpose-made title art
-        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        veil.fill((6, 8, 18, 60 if self.title_bg else 120))
-        screen.blit(veil, (0, 0))
+    def draw_title(self, screen, background=True):
+        if background:
+            photo = self.title_bg or (self.backgrounds[0]
+                                      if self.backgrounds else None)
+            if photo is None:
+                screen.fill(BG)
+            else:
+                screen.blit(photo, (0, 0))
+            # lighter veil when it is the purpose-made title art
+            veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            veil.fill((6, 8, 18, 60 if self.title_bg else 120))
+            screen.blit(veil, (0, 0))
 
         art = self.title_art
         if art is not None:
@@ -4400,22 +4408,37 @@ class Game:
         screen.blit(banner, (WIDTH // 2 - banner.get_width() // 2,
                              center[1] - banner.get_height() // 2))
 
-    def draw(self, screen):
+    def backdrop_photo(self):
+        """The background image for whatever is currently on screen.
+
+        Handed to the Display so it can cover the full screen, rather than
+        being baked into the 4:3 layer that gets letterboxed.
+        """
         if self.on_title:
-            self.draw_title(screen)
+            return self.title_bg or (self.backgrounds[0]
+                                     if self.backgrounds else None)
+        return self.background_for_level()
+
+    def draw(self, screen, background=True):
+        if self.on_title:
+            self.draw_title(screen, background=background)
             return
         offset = self.shake_offset()
         if offset == (0, 0):
+            # Draw straight to the target. Going via an intermediate surface
+            # and blitting SRCALPHA onto SRCALPHA does not reliably preserve
+            # the alpha channel, which blacked out the whole UI area.
             target = screen
         else:
             if self.frame is None:
-                self.frame = pygame.Surface((WIDTH, HEIGHT))
+                self.frame = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            self.frame.fill((0, 0, 0, 0))
             target = self.frame
 
         if self.state in ("flyoff", "banner"):
-            self.draw_transition(target)
+            self.draw_transition(target, background=background)
         else:
-            self.draw_scene(target)
+            self.draw_scene(target, background=background)
 
         if target is not screen:
             # Blow the frame up just enough that the shake offset can never
@@ -4425,9 +4448,9 @@ class Game:
                 target, (WIDTH + pad * 2, HEIGHT + pad * 2))
             screen.blit(big, (offset[0] - pad, offset[1] - pad))
 
-    def draw_transition(self, screen):
+    def draw_transition(self, screen, background=True):
         """Gems flying off, then the LEVEL banner over an empty board."""
-        self.draw_scene(screen)          # background, panel, empty board
+        self.draw_scene(screen, background=background)          # background, panel, empty board
         if self.state == "rainbow":
             self.update_rainbow(dt)
             return
@@ -4549,6 +4572,76 @@ class Game:
 
 # --------------------------------------------------------------------------
 
+class Display:
+    """Presents the fixed 960x720 game on any window or screen.
+
+    The UI is never stretched: it is scaled by a single factor and centred.
+    The background photo is scaled separately to COVER the whole display, so
+    a wide screen shows more background rather than distorted gems.
+    """
+
+    def __init__(self, fullscreen=False):
+        self.fullscreen = False
+        self.surface = None
+        self.layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        self.scale = 1.0
+        self.offset = (0, 0)
+        self.set_fullscreen(fullscreen)
+
+    def set_fullscreen(self, on):
+        self.fullscreen = on
+        if on:
+            self.surface = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+        else:
+            self.surface = pygame.display.set_mode((WIDTH, HEIGHT))
+        self.recompute()
+        return self.surface
+
+    def toggle(self):
+        return self.set_fullscreen(not self.fullscreen)
+
+    def recompute(self):
+        dw, dh = self.surface.get_size()
+        self.scale = min(dw / WIDTH, dh / HEIGHT)
+        self.offset = (int((dw - WIDTH * self.scale) / 2),
+                       int((dh - HEIGHT * self.scale) / 2))
+
+    def to_game(self, pos):
+        """Turn a real mouse position into virtual 960x720 coordinates."""
+        if self.scale <= 0:
+            return pos
+        return (int((pos[0] - self.offset[0]) / self.scale),
+                int((pos[1] - self.offset[1]) / self.scale))
+
+    def cover(self, photo):
+        """Scale a background to fill the whole display, cropping the excess."""
+        dw, dh = self.surface.get_size()
+        pw, ph = photo.get_size()
+        f = max(dw / pw, dh / ph)
+        art = pygame.transform.smoothscale(
+            photo, (int(pw * f + 0.5), int(ph * f + 0.5)))
+        self.surface.blit(art, ((dw - art.get_width()) // 2,
+                                (dh - art.get_height()) // 2))
+
+    def present(self, game):
+        self.surface.fill(BG)
+        photo = game.backdrop_photo()
+        if photo is not None:
+            self.cover(photo)
+
+        self.layer.fill((0, 0, 0, 0))
+        game.draw(self.layer, background=False)
+
+        if abs(self.scale - 1.0) < 0.001 and self.offset == (0, 0):
+            self.surface.blit(self.layer, (0, 0))
+        else:
+            size = (max(1, int(WIDTH * self.scale)),
+                    max(1, int(HEIGHT * self.scale)))
+            self.surface.blit(pygame.transform.smoothscale(self.layer, size),
+                              self.offset)
+        pygame.display.flip()
+
+
 def main():
     # This line has to come BEFORE pygame.init(). The default mixer buffer is
     # 4096 samples, which puts a very audible delay between clicking a gem and
@@ -4556,7 +4649,8 @@ def main():
     pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=512)
     pygame.init()
     pygame.display.set_caption("Match Three")
-    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    display = Display(fullscreen=False)
+    screen = display.surface
     clock = pygame.time.Clock()
 
     names = discover_gems()
@@ -4603,6 +4697,8 @@ def main():
         print(f"No skin images found in {UI_DIR}\n")
 
     game = Game(sprites, audio, effects, backgrounds, skin)
+    game.display = display
+    game.settings["fullscreen"] = display.fullscreen
 
     while True:
         dt = min(clock.tick(FPS) / 1000.0, 0.05)
@@ -4633,6 +4729,8 @@ def main():
                     audio.nudge_volume(VOLUME_STEP)
                 elif e.key == pygame.K_h:
                     game.show_hint()
+                elif e.key == pygame.K_F11:
+                    display.toggle()
                 elif e.key == pygame.K_n:
                     game.open_music()
                 elif e.key == pygame.K_t:
@@ -4640,11 +4738,11 @@ def main():
             elif e.type == MUSIC_END:
                 audio.next_track()
             elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
-                game.on_down(e.pos)
+                game.on_down(display.to_game(e.pos))
             elif e.type == pygame.MOUSEBUTTONUP and e.button == 1:
-                game.on_up(e.pos)
+                game.on_up(display.to_game(e.pos))
             elif e.type == pygame.MOUSEMOTION:
-                game.on_motion(e.pos)
+                game.on_motion(display.to_game(e.pos))
             elif e.type == pygame.MOUSEWHEEL and game.music_open:
                 game.music_list.scroll(-e.y)
             elif e.type == pygame.MOUSEWHEEL and game.dev_open:
@@ -4655,8 +4753,7 @@ def main():
             sys.exit()
 
         game.update(dt)
-        game.draw(screen)
-        pygame.display.flip()
+        display.present(game)
 
 
 if __name__ == "__main__":
