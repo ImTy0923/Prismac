@@ -43,6 +43,10 @@ UI skin (optional):
                     menubuttonhovered  (.png). Any missing file falls back
                     to the drawn-in-code look.
 
+Chaos (optional):
+    chaos/          bomb.png, rock.png, and optionally numbered gems used
+                    only while Chaos mode is running
+
 Backgrounds (optional):
     backgrounds/    1.png, 2.png ... one is shown per level, cycling round.
                     Scaled to cover the window and dimmed so gems stay readable.
@@ -101,6 +105,34 @@ LEVEL_GROWTH = 1.35        # each level needs this much more than the last
 
 # timed mode
 ENDLESS, TIMED, TITLE = "endless", "timed", "title"
+TIMED_MUSIC_MODE = "timedmusic"   # an Extras run that is on the clock
+SHAPES, EXTRAS, CHAOS = "shapes", "extras", "chaos"
+
+# Extras: modifiers the player can stack. Each is (key, label, blurb).
+EXTRA_DEFS = (
+    ("zen",     "ZEN",            "no clock, no score"),
+    ("mono",    "MONO",           "every gem the same colour"),
+    ("boom",    "EXPLOSIVES",     "explosives and rainbows spawn freely"),
+    ("lock",    "COLOUR LOCK",    "one colour scores, swaps every 10s"),
+    ("chaos",   "CHAOS",          "bombs and rocks in the mix"),
+)
+LOCK_SECONDS = 10.0
+
+# graphics toggles, both on by default and switchable from the title menu
+SETTING_DEFS = (
+    ("shake",     "CAMERA SHAKE",        "screen kick on big events"),
+    ("particles", "BACKGROUND PARTICLES", "drifting motes behind the board"),
+)
+PARTICLE_COUNT = 46
+DEV_CLICKS = 5             # taps on the logo to open developer mode
+
+# rainbow gem detonation: a short charge, then the targets zapped one by one
+RAINBOW_CHARGE = 0.55      # hypercube shaking before anything pops
+RAINBOW_STEP = 0.055       # gap between each gem being taken out
+RAINBOW_TAIL = 0.30        # a beat after the last one
+RAINBOW_MAX = 1.9          # hard ceiling, so a board wipe cannot drag
+ZAP_EVERY = 2              # play the zap sound on every Nth gem
+EXTRA_ROW = 52             # tall enough for a label and its blurb
 
 # The clock is frozen in all of these: the board is not playable, so running
 # it down would be unfair. It restarts the moment GO! appears.
@@ -134,6 +166,9 @@ DROP_PAUSE = 0.30          # beat between the banner and the new gems
 GO_PAUSE = 0.65            # beat between the gems landing and GO!
 SHAKE_FLYOFF = 5.0
 SHAKE_DECAY = 2.6
+SHAKE_BOMB = 7.0           # a bomb going off
+SHAKE_RAINBOW = 5.0        # the rainbow gem discharging
+SHAKE_FLAME = 3.0          # an explosive gem detonating
 SHAKE_MAX = 12.0
 
 LEVELUP_MIN = 0.9        # floor for the level-up pause, even with no sound
@@ -144,6 +179,22 @@ GO_TIME = 0.85           # how long the GO! flash sits on screen
 POINTS_PER_GEM = 10
 FLAME_BONUS = 60
 HYPER_BONUS = 200
+BOMB_BONUS = 80          # only awarded when bomb is detonated by explosion
+
+# Bomb mechanics
+# how often a refilled cell arrives as a rock or a bomb, in Chaos only
+# Explosives mode spawn rates
+BOOM_FLAME_CHANCE = 0.11
+BOOM_HYPER_CHANCE = 0.030
+
+CHAOS_ROCK_CHANCE = 0.055
+CHAOS_BOMB_CHANCE = 0.030
+
+BOMB_FUSE_MIN = 4
+BOMB_FUSE_MAX = 6
+
+# Cell types
+CELL_GEM, CELL_ROCK, CELL_BOMB, CELL_EMPTY = 0, 1, 2, 3
 
 def clamp01(t):
     return max(0.0, min(1.0, t))
@@ -216,6 +267,7 @@ MUSIC_DIR = asset_folder("music")
 EFFECT_DIR = asset_folder("effects")
 BACKGROUND_DIR = asset_folder("backgrounds")
 UI_DIR = asset_folder("ui")
+CHAOS_DIR = asset_folder("chaos")
 TITLE_DIR = asset_folder("title")
 
 # title screen
@@ -255,7 +307,9 @@ SFX_ALIASES = {
     "twomatch": ("TwoMatch", "Match4/5", "Match45"),
     "flyoff": ("FlyingGem", "FlyGem", "GemFly"),
     "flamemade": ("ExplodeGemCreated", "FlameGemCreated", "PowerGem"),
-    "hypermade": ("RainbowGemCreated", "HyperGemCreated", "Rainbow"),
+    "hypermade": ("RainbowGemCreated", "HyperGemCreated"),
+    "rainbowcharge": ("RainbowGem", "RainbowCharge"),
+    "rainbowzap": ("RainbowGemExplosion", "RainbowZap"),
     "falling": ("GemFalling", "Falling", "Fall", "Drop"),
     "explode": ("Explode", "Explosion", "Flame", "Boom"),
     "hyper":   ("Hypercube", "Hyper", "Supernova", "Explode"),
@@ -311,6 +365,17 @@ SECRET_SHUFFLE_KEYS = (pygame.K_F1, pygame.K_BACKSLASH)
 # gems/7.png is reserved for the hypercube, so it is kept out of the matchable
 # set. Rename or clear this if you ever want a seventh colour instead.
 HYPERCUBE_ASSET = "7"
+BOMB_ASSET = "bomb"
+ROCK_ASSET = "rock"
+# chaos/ holds the pieces only Chaos mode uses - bomb.png, rock.png, and
+# optionally its own numbered gems. Keeping them out of gems/ means they can
+# never leak into the normal modes.
+
+# Images in gems/ that are NOT playable colours. Anything listed here is
+# loaded for its own purpose and kept out of the matchable set - without
+# this, dropping bomb.png into gems/ silently adds an eighth gem colour to
+# every mode.
+RESERVED_GEMS = (HYPERCUBE_ASSET, BOMB_ASSET, ROCK_ASSET)
 
 # Fallback silhouettes, used only when a gem PNG is missing so the game still
 # runs. With real artwork present, none of this is touched.
@@ -338,7 +403,8 @@ def discover_gems():
             stem, ext = os.path.splitext(filename)
             if ext.lower() in (".png", ".jpg", ".jpeg", ".webp"):
                 names.append(stem)
-    names = [n for n in names if _norm(n) != _norm(HYPERCUBE_ASSET)]
+    reserved = {_norm(r) for r in RESERVED_GEMS}
+    names = [n for n in names if _norm(n) not in reserved]
     names.sort(key=lambda s: (0, int(s)) if s.isdigit() else (1, s.lower()))
 
     if len(names) < 3:
@@ -362,18 +428,37 @@ HYPER_KIND = -1          # a hypercube has no color
 
 class Gem:
     """One cell's contents: a color (kind), an optional power, and in timed
-    mode possibly a +3 second bonus."""
+    mode possibly a +3 second bonus. Now also handles rocks, bombs, and empty cells."""
 
-    __slots__ = ("kind", "power", "bonus")
+    __slots__ = ("kind", "power", "bonus", "cell_type", "fuse")
 
-    def __init__(self, kind, power=NORMAL, bonus=False):
+    def __init__(self, kind=0, power=NORMAL, bonus=False, cell_type=CELL_GEM, fuse=0):
         self.kind = kind
         self.power = power
         self.bonus = bonus
+        self.cell_type = cell_type
+        self.fuse = fuse  # bomb fuse countdown (0 = no bomb, else 4-6 moves remaining)
 
     def __repr__(self):
+        type_str = {CELL_GEM: "Gem", CELL_ROCK: "Rock", CELL_BOMB: "Bomb", CELL_EMPTY: "Empty"}.get(self.cell_type, "?")
+        if self.cell_type == CELL_BOMB:
+            return f"{type_str}(fuse={self.fuse})"
         tag = ", +3s" if self.bonus else ""
-        return f"Gem({self.kind}, {self.power}{tag})"
+        return f"{type_str}({self.kind}, {self.power}{tag})"
+
+    @staticmethod
+    def rock():
+        return Gem(cell_type=CELL_ROCK)
+
+    @staticmethod
+    def bomb(fuse=None):
+        if fuse is None:
+            fuse = random.randint(BOMB_FUSE_MIN, BOMB_FUSE_MAX)
+        return Gem(cell_type=CELL_BOMB, fuse=fuse)
+
+    @staticmethod
+    def empty():
+        return Gem(cell_type=CELL_EMPTY)
 
 
 # --------------------------------------------------------------------------
@@ -690,28 +775,57 @@ def in_bounds(r, c):
 
 
 def matchable(cell):
-    """Hypercubes are colorless and never take part in normal matching."""
-    return cell is not None and cell.power != HYPER
+    """A gem that can participate in normal color-matching.
+    Hypercubes are colorless and never match. Rocks, bombs, and empties never match."""
+    if cell is None:
+        return False
+    if cell.cell_type != CELL_GEM:
+        return False
+    return cell.power != HYPER
 
 
-def new_grid(bonuses=False):
-    """Random board with no pre-existing matches, guaranteed to have a move."""
+def is_gem(cell):
+    """A regular gem (not rock, bomb, or empty)."""
+    return cell is not None and cell.cell_type == CELL_GEM
+
+
+def is_clear_cell(cell):
+    """Cells that can be cleared by explosions (gems, bombs, but NOT rocks)."""
+    return cell is not None and cell.cell_type in (CELL_GEM, CELL_BOMB)
+
+
+def new_grid(bonuses=False, chaos=False, shapes=False):
+    """Random board with no pre-existing matches, guaranteed to have a move.
+    
+    In Chaos mode, randomly place rocks and bombs.
+    In Shapes mode, create an irregular board with holes (EMPTY cells).
+    """
+    if shapes:
+        return new_shapes_grid(bonuses)
+    
     while True:
         g = [[None] * COLS for _ in range(ROWS)]
         for r in range(ROWS):
             for c in range(COLS):
                 banned = set()
-                if c >= 2 and g[r][c - 1].kind == g[r][c - 2].kind:
-                    banned.add(g[r][c - 1].kind)
-                if r >= 2 and g[r - 1][c].kind == g[r - 2][c].kind:
-                    banned.add(g[r - 1][c].kind)
+                if c >= 2 and is_gem(g[r][c - 1]) and is_gem(g[r][c - 2]):
+                    if g[r][c - 1].kind == g[r][c - 2].kind:
+                        banned.add(g[r][c - 1].kind)
+                if r >= 2 and is_gem(g[r - 1][c]) and is_gem(g[r - 2][c]):
+                    if g[r - 1][c].kind == g[r - 2][c].kind:
+                        banned.add(g[r - 1][c].kind)
                 choices = [t for t in range(N_TYPES) if t not in banned]
                 g[r][c] = Gem(random.choice(choices),
                               bonus=bonuses and random.random() < BONUS_CHANCE)
+        
+        if chaos:
+            add_chaos_elements(g)
+        
         if not has_move(g):
             continue
+        
         if bonuses:
-            cells = [(r, c) for r in range(ROWS) for c in range(COLS)]
+            cells = [(r, c) for r in range(ROWS) for c in range(COLS) if is_gem(g[r][c])]
             random.shuffle(cells)
             while count_bonus(g) < BONUS_MIN and cells:
                 r, c = cells.pop()
@@ -719,9 +833,92 @@ def new_grid(bonuses=False):
         return g
 
 
+def add_chaos_elements(g):
+    """Randomly place rocks and bombs in an existing grid."""
+    cells = [(r, c) for r in range(ROWS) for c in range(COLS)]
+    random.shuffle(cells)
+    
+    # Place roughly 10-15% rocks and bombs combined
+    num_special = random.randint(max(1, len(cells) // 10), max(2, len(cells) // 7))
+    for _ in range(num_special):
+        if not cells:
+            break
+        r, c = cells.pop()
+        if random.random() < 0.6:
+            g[r][c] = Gem.rock()
+        else:
+            g[r][c] = Gem.bomb()
+
+
+SHAPE_MASKS = (
+    "diamond", "cross", "hourglass", "ring", "arrow", "butterfly",
+)
+
+
+def shape_mask(name):
+    """Which cells are playable for a given silhouette.
+
+    Returns a set of (row, col). Everything outside it becomes a hole, which
+    is what actually makes a Shapes board look like a shape.
+    """
+    cr, cc = (ROWS - 1) / 2, (COLS - 1) / 2
+    keep = set()
+    for r in range(ROWS):
+        for c in range(COLS):
+            dr, dc = r - cr, c - cc
+            if name == "diamond":
+                ok = abs(dr) + abs(dc) <= max(ROWS, COLS) / 2 + 0.5
+            elif name == "cross":
+                ok = abs(dr) <= 1.5 or abs(dc) <= 1.5
+            elif name == "hourglass":
+                ok = abs(dc) <= abs(dr) + 1.2
+            elif name == "ring":
+                d = math.hypot(dr, dc)
+                ok = 1.6 <= d <= cr + 0.6
+            elif name == "arrow":
+                ok = abs(dc) <= (cr - dr) / 1.4 + 0.5
+            else:                                   # butterfly
+                ok = abs(dr) <= abs(dc) + 1.2
+            if ok:
+                keep.add((r, c))
+    # never leave so little board that the game cannot be played
+    return keep if len(keep) >= ROWS * COLS * 0.45 else {
+        (r, c) for r in range(ROWS) for c in range(COLS)}
+
+
+def new_shapes_grid(bonuses=False, mask=None):
+    """An irregular board: a silhouette of playable cells, holes elsewhere."""
+    if mask is None:
+        mask = shape_mask(random.choice(SHAPE_MASKS))
+    while True:
+        g = [[None] * COLS for _ in range(ROWS)]
+        for r in range(ROWS):
+            for c in range(COLS):
+                if (r, c) not in mask:
+                    g[r][c] = Gem.empty()
+                    continue
+                banned = set()
+                if c >= 2 and is_gem(g[r][c - 1]) and is_gem(g[r][c - 2]):
+                    if g[r][c - 1].kind == g[r][c - 2].kind:
+                        banned.add(g[r][c - 1].kind)
+                if r >= 2 and is_gem(g[r - 1][c]) and is_gem(g[r - 2][c]):
+                    if g[r - 1][c].kind == g[r - 2][c].kind:
+                        banned.add(g[r - 1][c].kind)
+                choices = [t for t in range(N_TYPES) if t not in banned]
+                g[r][c] = Gem(random.choice(choices),
+                              bonus=bonuses and random.random() < BONUS_CHANCE)
+        if not find_runs(g) and has_move(g):
+            return g
+
+
 def find_runs(g):
-    """Every straight run of 3 or more same-colored gems, as lists of cells."""
+    """Every straight run of 3 or more same-colored gems.
+    
+    Ignores rocks, bombs, and empty cells - they break the run.
+    """
     runs = []
+    
+    # Horizontal
     for r in range(ROWS):
         c = 0
         while c < COLS:
@@ -735,6 +932,8 @@ def find_runs(g):
             if end - c + 1 >= 3:
                 runs.append([(r, x) for x in range(c, end + 1)])
             c = end + 1
+    
+    # Vertical
     for c in range(COLS):
         r = 0
         while r < ROWS:
@@ -748,6 +947,7 @@ def find_runs(g):
             if end - r + 1 >= 3:
                 runs.append([(x, c) for x in range(r, end + 1)])
             r = end + 1
+    
     return runs
 
 
@@ -760,55 +960,107 @@ def find_matches(g):
 
 
 def has_move(g):
-    """True if some adjacent swap would do something."""
+    """True if some adjacent swap would do something.
+    
+    Hypercubes can always be swapped. For normal gems, try all adjacent swaps.
+    Rocks and bombs can be involved in swaps (they're adjacent to gems) but
+    they themselves don't create matches.
+    """
+    # Hypercubes always produce a result
     for r in range(ROWS):
         for c in range(COLS):
-            # a hypercube can always be swapped with a neighbor
-            if g[r][c] is not None and g[r][c].power == HYPER:
-                return True
+            if g[r][c] is not None and g[r][c].cell_type == CELL_GEM and g[r][c].power == HYPER:
+                for dr, dc in ((0, 1), (1, 0), (0, -1), (-1, 0)):
+                    r2, c2 = r + dr, c + dc
+                    if in_bounds(r2, c2) and g[r2][c2] is not None:
+                        return True
+    
+    # Try every adjacent pair
     for r in range(ROWS):
         for c in range(COLS):
             for dr, dc in ((0, 1), (1, 0)):
                 r2, c2 = r + dr, c + dc
                 if not in_bounds(r2, c2):
                     continue
+                # Try the swap
                 g[r][c], g[r2][c2] = g[r2][c2], g[r][c]
-                ok = bool(find_runs(g))
+                scores = bool(find_runs(g))
                 g[r][c], g[r2][c2] = g[r2][c2], g[r][c]
-                if ok:
+                if scores:
                     return True
+    
     return False
 
 
-def detonate(g, cells):
-    """Expand a clear set to include chained flame gem explosions."""
+def detonate(g, cells, score_dict=None):
+    """Expand a clear set to include chained explosions.
+    
+    Flame gems and bombs explode outward, triggering other explosions.
+    Bombs only contribute to score if triggered by another explosion.
+    
+    If score_dict is provided, marks which explosions are "triggered" (for bomb scoring).
+    """
     cleared = set(cells)
-    queue = [rc for rc in cells
-             if g[rc[0]][rc[1]] is not None and g[rc[0]][rc[1]].power == FLAME]
-    fired = set(queue)
+    queue = []
+    
+    # Start with flame gems and bombs
+    for rc in cells:
+        if not in_bounds(rc[0], rc[1]):
+            continue
+        gem = g[rc[0]][rc[1]]
+        if gem is None:
+            continue
+        if gem.cell_type == CELL_GEM and gem.power == FLAME:
+            queue.append((rc, True))  # Flame gem, mark as direct
+        elif gem.cell_type == CELL_BOMB:
+            queue.append((rc, False))  # Bomb, mark as triggered
+    
+    fired = set()
     while queue:
-        r, c = queue.pop()
+        (r, c), is_flame = queue.pop()
+        if (r, c) in fired:
+            continue
+        fired.add((r, c))
+        
+        # Explode: hit 8 surrounding cells
         for dr in (-1, 0, 1):
             for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
                 rr, cc = r + dr, c + dc
                 if not in_bounds(rr, cc) or g[rr][cc] is None:
                     continue
+                
                 cleared.add((rr, cc))
-                if g[rr][cc].power == FLAME and (rr, cc) not in fired:
-                    fired.add((rr, cc))
-                    queue.append((rr, cc))
+                
+                # Queue up secondary explosions if this is a flame or bomb
+                gem_hit = g[rr][cc]
+                if gem_hit.cell_type == CELL_GEM and gem_hit.power == FLAME:
+                    queue.append(((rr, cc), True))
+                elif gem_hit.cell_type == CELL_BOMB and (rr, cc) not in fired:
+                    queue.append(((rr, cc), False))
+                    # Bomb was triggered, mark for scoring if score_dict provided
+                    if score_dict is not None:
+                        score_dict[(rr, cc)] = True
+    
     return cleared
 
 
-def plan_clear(g, runs, origin=()):
-    """Work out what a set of runs destroys and what it leaves behind.
+def plan_clear(g, runs, origin=(), score_dict=None):
+    """Work out what a set of runs destroys.
 
     origin is the cells the player just moved; a special prefers to appear
     under the player's own gem, which is what makes placement feel deliberate
     rather than random.
 
     Returns (cells_to_clear, {cell: power}).
+    
+    Rocks NEVER clear (even from explosions).
+    Empty cells are never cleared either.
     """
+    if score_dict is None:
+        score_dict = {}
+    
     base = set()
     spawns = {}
 
@@ -823,20 +1075,24 @@ def plan_clear(g, runs, origin=()):
         # gem into a run of 4 quietly upgrades it instead of detonating it.
         def plain(rc):
             gem = g[rc[0]][rc[1]]
-            return gem is not None and gem.power == NORMAL
+            return gem is not None and gem.cell_type == CELL_GEM and gem.power == NORMAL
 
         at = next((rc for rc in origin if rc in run and plain(rc)), None)
         if at is None:
             middle = sorted(run, key=lambda rc: abs(run.index(rc) - len(run) // 2))
             at = next((rc for rc in middle if plain(rc)), None)
-        if at is None:                      # every gem in the run is special
+        if at is None:
             at = next((rc for rc in origin if rc in run), run[len(run) // 2])
-        if spawns.get(at, NORMAL) < power:
+        if at is not None and spawns.get(at, NORMAL) < power:
             spawns[at] = power
 
     clear = base - set(spawns)
-    clear = detonate(g, clear)
+    clear = detonate(g, clear, score_dict)
     clear -= set(spawns)          # a new special survives its own blast
+    
+    # Remove rocks and empty cells from clear set (they never clear)
+    clear = {rc for rc in clear if is_clear_cell(g[rc[0]][rc[1]])}
+    
     return clear, spawns
 
 
@@ -853,14 +1109,18 @@ def hyper_targets(g, hyper_cell, other_cell):
 
 
 def find_hint(g):
-    """Pick a swap that would actually score. Random among all of them, so
-    asking twice in a row suggests somewhere different."""
+    """Pick a swap that would actually score.
+    
+    Random among all valid moves, so asking twice suggests somewhere different.
+    """
+    # Hypercubes always work
     for r in range(ROWS):
         for c in range(COLS):
-            if g[r][c] is not None and g[r][c].power == HYPER:
+            if g[r][c] is not None and g[r][c].cell_type == CELL_GEM and g[r][c].power == HYPER:
                 for dr, dc in ((0, 1), (1, 0), (0, -1), (-1, 0)):
-                    if in_bounds(r + dr, c + dc):
+                    if in_bounds(r + dr, c + dc) and g[r + dr][c + dc] is not None:
                         return (r, c), (r + dr, c + dc)
+    
     moves = []
     for r in range(ROWS):
         for c in range(COLS):
@@ -873,6 +1133,7 @@ def find_hint(g):
                 g[r][c], g[r2][c2] = g[r2][c2], g[r][c]
                 if scores:
                     moves.append(((r, c), (r2, c2)))
+    
     return random.choice(moves) if moves else None
 
 
@@ -881,36 +1142,136 @@ def count_bonus(g):
                if gem is not None and gem.bonus)
 
 
-def collapse(g, bonuses=False):
+def fresh_gem(bonuses=False, boom=False):
+    """One newly spawned gem. In Explosives mode it may arrive already
+    charged - that is the only way an explosive appears without a match."""
+    gem = Gem(random.randrange(N_TYPES),
+              bonus=bonuses and random.random() < BONUS_CHANCE)
+    if boom:
+        roll = random.random()
+        if roll < BOOM_HYPER_CHANCE:
+            gem.power = HYPER
+            gem.kind = HYPER_KIND
+            gem.bonus = False
+        elif roll < BOOM_HYPER_CHANCE + BOOM_FLAME_CHANCE:
+            gem.power = FLAME
+    return gem
+
+
+def collapse(g, bonuses=False, chaos=False, shapes=False, boom=False,
+             mask=None):
     """Drop gems into holes and refill the top.
+    
+    In normal mode, gems fall straight down to the bottom.
+    Rocks also fall. Bombs fall with their fuse ticking down.
+    Empty cells stay empty (holes in the board).
 
     With bonuses=True (timed mode) some new gems arrive carrying +3 seconds.
     A floor of BONUS_MIN is topped up so the board never runs dry of them.
 
     Returns {(row, col): rows_fallen} so the drop can be animated.
+    
+    Also decrements bomb fuses each turn.
     """
+    # An irregular board needs the hole-aware collapse, or its shape is
+    # scrubbed flat the first time anything falls.
+    if shapes or mask:
+        return collapse_shapes(g, bonuses, boom, mask)
+
     falls = {}
+    # NOTE: bomb fuses are NOT ticked here. settle() does it once per player
+    # move, so doing it per collapse would burn several moves off a bomb for
+    # a single swap that cascades.
     for c in range(COLS):
         write = ROWS - 1
         for r in range(ROWS - 1, -1, -1):
-            if g[r][c] is not None:
+            if g[r][c] is not None and g[r][c].cell_type != CELL_EMPTY:
                 if write != r:
                     g[write][c] = g[r][c]
                     g[r][c] = None
                     falls[(write, c)] = write - r
                 write -= 1
+        
+        # Refill from top
         n_new = write + 1
         for r in range(write, -1, -1):
-            g[r][c] = Gem(random.randrange(N_TYPES),
-                          bonus=bonuses and random.random() < BONUS_CHANCE)
+            # In Chaos, new rocks and bombs keep arriving with the gems -
+            # otherwise the board is scrubbed clean after the first clear.
+            roll = random.random() if chaos else 1.0
+            if roll < CHAOS_ROCK_CHANCE:
+                g[r][c] = Gem.rock()
+            elif roll < CHAOS_ROCK_CHANCE + CHAOS_BOMB_CHANCE:
+                g[r][c] = Gem.bomb(random.randint(BOMB_FUSE_MIN, BOMB_FUSE_MAX))
+            else:
+                g[r][c] = fresh_gem(bonuses, boom)
             falls[(r, c)] = n_new  # falls in from above the board
 
     if bonuses:
-        fresh = [rc for rc in falls if not g[rc[0]][rc[1]].bonus]
+        fresh = [rc for rc in falls if g[rc[0]][rc[1]].cell_type == CELL_GEM and not g[rc[0]][rc[1]].bonus]
         random.shuffle(fresh)
         while count_bonus(g) < BONUS_MIN and fresh:
             r, c = fresh.pop()
             g[r][c].bonus = True
+    
+    return falls
+
+
+def collapse_shapes(g, bonuses=False, boom=False, mask=None):
+    """Collapse with support for irregular boards (holes/empty cells).
+    
+    Gems and bombs fall down, passing through empty cells.
+    Rocks also fall.
+    Empty cells block gems from crossing, like invisible platforms.
+    """
+    falls = {}
+    # NOTE: bomb fuses are NOT ticked here. settle() does it once per player
+    # move, so doing it per collapse would burn several moves off a bomb for
+    # a single swap that cascades.
+    for c in range(COLS):
+        # Collect all non-empty cells in this column
+        filled = []
+        holes = []
+        for r in range(ROWS):
+            if g[r][c] is None:
+                pass
+            elif g[r][c].cell_type == CELL_EMPTY:
+                holes.append(r)
+            else:
+                filled.append((r, g[r][c]))
+        
+        # Clear the column
+        for r in range(ROWS):
+            g[r][c] = None
+        
+        # Reposition holes
+        for r in holes:
+            g[r][c] = Gem.empty()
+        
+        # Drop filled cells, respecting hole positions
+        write = ROWS - 1
+        for r_src, cell in reversed(filled):
+            # Find the next available spot going down
+            while write >= 0 and g[write][c] is not None:
+                write -= 1
+            if write >= 0:
+                g[write][c] = cell
+                if write != r_src:
+                    falls[(write, c)] = write - r_src
+                write -= 1
+        
+        # Refill top
+        for r in range(ROWS):
+            if g[r][c] is None and not any(h == r for h in holes):
+                g[r][c] = fresh_gem(bonuses, boom)
+                falls[(r, c)] = 1
+
+    if bonuses:
+        fresh = [rc for rc in falls if g[rc[0]][rc[1]].cell_type == CELL_GEM and not g[rc[0]][rc[1]].bonus]
+        random.shuffle(fresh)
+        while count_bonus(g) < BONUS_MIN and fresh:
+            r, c = fresh.pop()
+            g[r][c].bonus = True
+    
     return falls
 
 
@@ -1268,6 +1629,7 @@ def describe_assets():
             ("music", MUSIC_DIR, AUDIO_EXTS),
             ("backgrounds", BACKGROUND_DIR, (".png", ".jpg", ".jpeg", ".webp")),
             ("effects", EFFECT_DIR, (".png", ".webp", ".gif")),
+            ("chaos", CHAOS_DIR, (".png", ".jpg", ".jpeg", ".webp")),
             ("fonts", FONT_DIR, (".ttf", ".otf"))):
         if not os.path.isdir(folder):
             print(f"  {label:<13} MISSING   (looked in {folder})")
@@ -1323,6 +1685,39 @@ def load_title_background():
                           (HEIGHT - art.get_height()) // 2))
         return canvas
     return None
+
+
+def load_chaos_assets():
+    """Everything in chaos/, keyed by normalised filename.
+
+    Returns {"bomb": Surface, "rock": Surface, "gems": [Surface, ...]} where
+    "gems" is any numbered artwork that should replace the normal set while
+    Chaos is running. All of it is optional.
+    """
+    found = {"bomb": None, "rock": None, "gems": []}
+    if not os.path.isdir(CHAOS_DIR):
+        return found
+    numbered = []
+    for filename in sorted(os.listdir(CHAOS_DIR)):
+        stem, ext = os.path.splitext(filename)
+        if ext.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+            continue
+        try:
+            art = pygame.image.load(
+                os.path.join(CHAOS_DIR, filename)).convert_alpha()
+        except pygame.error:
+            continue
+        key = _norm(stem)
+        if key == _norm(BOMB_ASSET):
+            found["bomb"] = centred(fit_in(art, TILE - GEM_PAD * 2))
+        elif key == _norm(ROCK_ASSET):
+            found["rock"] = centred(fit_in(art, TILE - GEM_PAD * 2))
+        elif stem.isdigit():
+            numbered.append((int(stem), art))
+    numbered.sort()
+    found["gems"] = [centred(fit_in(art, TILE - GEM_PAD * 2))
+                     for _, art in numbered]
+    return found
 
 
 def load_backgrounds():
@@ -1408,6 +1803,7 @@ class Audio:
         self.title_playlist = []
         self.mode = ENDLESS
         self.playlist_started = False
+        self.chosen = None          # a track the player picked by hand
         self.track = 0
         self.found = []
         self.missing = []
@@ -1536,7 +1932,7 @@ class Audio:
         never goes silent."""
         if self.mode == TITLE and self.title_playlist:
             return self.title_playlist
-        if self.mode == TIMED and self.timed_playlist:
+        if self.mode in (TIMED, TIMED_MUSIC_MODE) and self.timed_playlist:
             return self.timed_playlist
         return self.playlist
 
@@ -1582,8 +1978,28 @@ class Audio:
         except pygame.error as exc:
             print(f"Could not play {os.path.basename(songs[self.track])}: {exc}")
 
+    def track_names(self):
+        """Display names for the current playlist, for the picker."""
+        return [os.path.splitext(os.path.basename(p))[0]
+                for p in self.active_list()]
+
+    def play_chosen(self, index):
+        """Play one specific track. After it ends the shuffle resumes."""
+        songs = self.active_list()
+        if not self.ok or not songs or not (0 <= index < len(songs)):
+            return None
+        self.chosen = index
+        self.play_track(index)
+        return self.now_playing()
+
     def next_track(self):
         """Called from the main loop when a track ends."""
+        if self.chosen is not None:
+            # the hand-picked song has finished: go back to shuffling
+            self.chosen = None
+            self.reshuffle()
+            self.play_track(0)
+            return
         songs = self.active_list()
         if not songs:
             return
@@ -1632,6 +2048,7 @@ class Audio:
         a.title_playlist = []
         a.mode = ENDLESS
         a.playlist_started = False
+        a.chosen = None
         a.track = 0
         a.found = []
         a.missing = []
@@ -1839,6 +2256,65 @@ class FlyingGem:
             int(self.y + self.dy * p + 900 * p * p))))   # gravity
 
 
+class ScrollList:
+    """A scrollable list of rows. Used for the music picker."""
+
+    ROW = 34
+
+    def __init__(self, rect):
+        self.rect = pygame.Rect(rect)
+        self.items = []
+        self.offset = 0.0
+        self.hover = -1
+        self.current = -1
+
+    @property
+    def visible(self):
+        return max(1, self.rect.height // self.ROW)
+
+    def max_offset(self):
+        return max(0, len(self.items) - self.visible)
+
+    def scroll(self, steps):
+        self.offset = max(0, min(self.max_offset(), self.offset + steps))
+
+    def index_at(self, pos):
+        if not self.rect.collidepoint(pos):
+            return -1
+        row = int(self.offset) + (pos[1] - self.rect.y) // self.ROW
+        return row if 0 <= row < len(self.items) else -1
+
+    def draw(self, screen, font):
+        screen.blit(translucent(self.rect.size, (255, 255, 255, 16), None, 8),
+                    self.rect.topleft)
+        clip = screen.get_clip()
+        screen.set_clip(self.rect)
+        top = int(self.offset)
+        for i in range(top, min(len(self.items), top + self.visible + 1)):
+            y = self.rect.y + (i - top) * self.ROW
+            if i == self.current:
+                screen.blit(translucent((self.rect.width, self.ROW - 2),
+                                        GOLD + (70,), None, 6),
+                            (self.rect.x, y))
+            elif i == self.hover:
+                screen.blit(translucent((self.rect.width, self.ROW - 2),
+                                        (255, 255, 255, 34), None, 6),
+                            (self.rect.x, y))
+            colour = GOLD if i == self.current else TEXT
+            label = Button.fit(font, self.items[i], self.rect.width - 20)
+            image = label.render(self.items[i], True, colour)
+            screen.blit(image, (self.rect.x + 10,
+                                y + (self.ROW - image.get_height()) // 2))
+        screen.set_clip(clip)
+
+        # scrollbar, only when there is something to scroll to
+        if self.max_offset() > 0:
+            span = self.rect.height * self.visible / len(self.items)
+            pos = (self.rect.height - span) * self.offset / self.max_offset()
+            screen.blit(translucent((4, int(span)), (255, 255, 255, 110), None, 2),
+                        (self.rect.right - 6, self.rect.y + int(pos)))
+
+
 class Button:
     """Rounded button. Uses skin artwork when it was supplied, else draws."""
 
@@ -1929,6 +2405,11 @@ class Game:
         self.anims = effects or {}
         self.backgrounds = backgrounds or []
         # flame gems: a glow shaped like the gem, and a travelling glint
+        self._blocks = {}
+        self.blank_tile = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
+        self.chaos_art = load_chaos_assets()
+        self.mono_normal = [self.greyscale(spr) for spr in self.normal]
+        self.mono_flame = [self.greyscale(spr) for spr in self.flame]
         self.flame_halo = [bake_halo(spr, (255, 150, 46)) for spr in self.flame]
         self.flame_glint = [bake_glints(spr) for spr in self.flame]
         self.banner = self.build_banner()
@@ -1940,6 +2421,19 @@ class Game:
         self.skin = skin or {}
         self.on_title = True
         self.title_ready = False
+        self.extras_open = False
+        self.dev_open = False
+        self.dev_clicks = 0
+        self.dev_note = ""
+        self.extras = {k: False for k, _, _ in EXTRA_DEFS}
+        self.extra_clock = ENDLESS
+        self.extras_note = ""
+        self.settings = {k: True for k, _, _ in SETTING_DEFS}
+        self.settings_open = False
+        self.motes = [[random.uniform(0, WIDTH), random.uniform(0, HEIGHT),
+                       random.uniform(1.0, 2.8), random.uniform(-11, -3),
+                       random.uniform(0.25, 0.7)]
+                      for _ in range(PARTICLE_COUNT)]
         self.title_art = self.build_title()
         self.title_bg = load_title_background()
         self.board_bg = self.build_board_backdrop()
@@ -1956,6 +2450,7 @@ class Game:
         self.font_small = load_font(2)
         self.build_widgets()
         self.build_title_widgets()
+        self.build_dev_widgets()
         self.reset()
 
     def build_title(self):
@@ -1978,13 +2473,233 @@ class Game:
 
     def build_title_widgets(self):
         cx = WIDTH // 2
-        w, h = 300, 62
-        self.title_buttons = [
-            Button((cx - w // 2, 452, w, h), "ENDLESS",
-                   lambda: self.start_game(ENDLESS), accent=GOLD),
-            Button((cx - w // 2, 452 + h + 16, w, h), "TIMED",
-                   lambda: self.start_game(TIMED), accent=(126, 216, 150)),
+        w, h, gap = 250, 52, 12
+        specs = ((("ENDLESS", lambda: self.start_game(ENDLESS), GOLD),
+                  ("TIMED", lambda: self.start_game(TIMED), (126, 216, 150))),
+                 (("SHAPES", lambda: self.start_game(SHAPES), (232, 150, 96)),
+                  ("EXTRAS", self.open_extras, (176, 140, 240))),
+                 (("MENU", self.open_settings, (150, 160, 190)),
+                  ("QUIT", self.quit, (232, 92, 92))))
+        self.title_buttons = []
+        for row, pair in enumerate(specs):
+            for col, (label, action, accent) in enumerate(pair):
+                x = cx - w - gap // 2 + col * (w + gap)
+                y = 396 + row * (h + gap)
+                self.title_buttons.append(
+                    Button((x, y, w, h), label, action, accent=accent))
+
+        # extras chooser
+        box = self.extras_rect()
+        self.extra_rows = []
+        for i, (key, label, blurb) in enumerate(EXTRA_DEFS):
+            self.extra_rows.append(
+                (key, pygame.Rect(box.x + 26, box.y + 70 + i * EXTRA_ROW,
+                                  box.width - 52, EXTRA_ROW - 6), label, blurb))
+        half = (box.width - 52 - 12) // 2
+        by = box.y + 70 + len(EXTRA_DEFS) * EXTRA_ROW + 12
+        self.extra_buttons = [
+            Button((box.x + 26, by, half, 40), "ENDLESS",
+                   lambda: self.set_extra_clock(ENDLESS), accent=GOLD),
+            Button((box.x + 26 + half + 12, by, half, 40), "TIMED",
+                   lambda: self.set_extra_clock(TIMED), accent=(126, 216, 150)),
+            Button((box.x + 26, by + 52, half, 40), "BACK",
+                   self.close_extras),
+            Button((box.x + 26 + half + 12, by + 52, half, 40), "PLAY",
+                   self.play_extras, accent=(126, 216, 150)),
         ]
+
+    @staticmethod
+    def dev_rect():
+        return pygame.Rect(WIDTH // 2 - 260, 70, 520, 590)
+
+    def logo_rect(self):
+        """Where the title art sits, for the secret dev-mode taps."""
+        if self.title_art is None:
+            return pygame.Rect(WIDTH // 2 - 200, 60, 400, 180)
+        return self.title_art.get_rect(center=(WIDTH // 2, 148))
+
+    def build_dev_widgets(self):
+        """Developer mode: fire each effect and cue on demand."""
+        box = self.dev_rect()
+        pad, gap = 24, 8
+        w = (box.width - pad * 2 - gap) // 2
+        specs = [
+            ("MATCH", lambda: self.dev_effect("match")),
+            ("EXPLODE", lambda: self.dev_effect("explode")),
+            ("SMOKE", lambda: self.dev_smoke()),
+            ("HYPER FX", lambda: self.dev_effect("hyper")),
+            ("GO!", lambda: self.dev_go()),
+            ("LEVEL UP", lambda: self.dev_levelup()),
+            ("RAINBOW BLAST", lambda: self.dev_rainbow()),
+            ("BOMB BLAST", lambda: self.dev_bomb()),
+            ("SHAKE", lambda: self.add_shake(SHAKE_MAX)),
+            ("SPAWN FLAME", lambda: self.dev_place(FLAME)),
+            ("SPAWN RAINBOW", lambda: self.dev_place(HYPER)),
+            ("SPAWN BOMB", lambda: self.dev_place(None, CELL_BOMB)),
+            ("SPAWN ROCK", lambda: self.dev_place(None, CELL_ROCK)),
+            ("CLOSE", self.close_dev),
+        ]
+        self.dev_buttons = []
+        for i, (label, action) in enumerate(specs):
+            x = box.x + pad + (i % 2) * (w + gap)
+            y = box.y + 96 + (i // 2) * 46
+            self.dev_buttons.append(Button((x, y, w, 40), label, action))
+
+        sounds = ["match3", "twomatch", "cascade2", "cascade3", "explode",
+                  "hyper", "flamemade", "hypermade", "rainbowcharge",
+                  "rainbowzap", "flyoff", "go", "levelup", "gameover",
+                  "menuclick", "select", "nomatch", "falling", "bonus",
+                  "shuffle"]
+        self.dev_sounds = ScrollList((box.x + pad, box.y + 96 + 7 * 46 + 10,
+                                      box.width - pad * 2, 150))
+        self.dev_sounds.items = sounds
+
+    def open_dev(self):
+        self.dev_open = True
+        self.dev_note = "DEVELOPER MODE"
+        self.audio.play("menuclick")
+
+    def close_dev(self):
+        self.dev_open = False
+        self.dev_clicks = 0
+
+    # -- developer actions -------------------------------------------------
+
+    def dev_cell(self):
+        return ROWS // 2, COLS // 2
+
+    def dev_ensure_board(self):
+        if not self.grid or self.grid[0][0] is None:
+            self.grid = new_grid()
+
+    def dev_effect(self, name):
+        r, c = self.dev_cell()
+        self.spawn_effect(name, r, c)
+        self.dev_note = f"{name} x1"
+
+    def dev_smoke(self):
+        r, c = self.dev_cell()
+        self.spawn_smoke(r, c)
+        self.dev_note = f"smoke ({len(self.puffs)} puffs)"
+
+    def dev_go(self):
+        self.go_left = GO_TIME
+        self.audio.play("go")
+        self.dev_note = "GO!"
+
+    def dev_levelup(self):
+        self.close_dev()
+        self.begin_levelup()
+
+    def dev_rainbow(self):
+        r, c = self.dev_cell()
+        self.grid[r][c] = Gem(HYPER_KIND, HYPER)
+        targets = {(rr, cc) for rr in range(ROWS) for cc in range(COLS)
+                   if self.grid[rr][cc] is not None
+                   and self.grid[rr][cc].cell_type == CELL_GEM
+                   and abs(rr - r) + abs(cc - c) <= 4}
+        self.close_dev()
+        self.begin_rainbow((r, c), targets)
+
+    def dev_bomb(self):
+        r, c = self.dev_cell()
+        self.grid[r][c] = Gem.bomb(1)
+        self.move_pending = True
+        self.close_dev()
+        self.settle()
+
+    def dev_place(self, power, cell_type=None):
+        r, c = self.dev_cell()
+        if cell_type == CELL_BOMB:
+            self.grid[r][c] = Gem.bomb(random.randint(BOMB_FUSE_MIN, BOMB_FUSE_MAX))
+            self.dev_note = "bomb placed at centre"
+        elif cell_type == CELL_ROCK:
+            self.grid[r][c] = Gem.rock()
+            self.dev_note = "rock placed at centre"
+        elif power == HYPER:
+            self.grid[r][c] = Gem(HYPER_KIND, HYPER)
+            self.dev_note = "rainbow placed at centre"
+        else:
+            self.grid[r][c] = Gem(self.grid[r][c].kind if
+                                  self.grid[r][c].cell_type == CELL_GEM else 0,
+                                  FLAME)
+            self.dev_note = "flame placed at centre"
+
+    def draw_dev(self, screen):
+        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        veil.fill((6, 8, 18, 205))
+        screen.blit(veil, (0, 0))
+        box = self.dev_rect()
+        screen.blit(translucent(box.size, PANEL_FILL, PANEL_EDGE, 16),
+                    box.topleft)
+        title = self.font_big.render("DEV MODE", True, GOLD)
+        screen.blit(title, (box.x + 24, box.y + 22))
+        if self.dev_note:
+            note = self.font_small.render(self.dev_note, True, DIM)
+            screen.blit(note, (box.right - 24 - note.get_width(), box.y + 28))
+        hint = self.font_small.render("EFFECTS", True, DIM)
+        screen.blit(hint, (box.x + 24, box.y + 74))
+        for button in self.dev_buttons:
+            button.draw(screen, self.font)
+        label = self.font_small.render("SOUNDS - CLICK TO PLAY", True, DIM)
+        screen.blit(label, (box.x + 24, self.dev_sounds.rect.y - 18))
+        self.dev_sounds.draw(screen, self.font_small)
+
+    @staticmethod
+    def settings_rect():
+        return pygame.Rect(WIDTH // 2 - 240, 128, 480, 452)
+
+    def open_settings(self):
+        """Kept as a name; the graphics toggles live in the main menu now."""
+        self.open_menu()
+        self.audio.play("menuclick")
+
+    def close_settings(self):
+        self.settings_open = False
+        self.audio.play("menuclick")
+
+    def toggle_setting(self, key):
+        self.settings[key] = not self.settings.get(key, True)
+        if key == "shake":
+            self.shake = 0.0
+        self.audio.play("menuclick")
+
+    @staticmethod
+    def extras_rect():
+        return pygame.Rect(WIDTH // 2 - 250, 96, 500, 540)
+
+    def open_extras(self):
+        self.extras_open = True
+        self.audio.play("menuclick")
+
+    def close_extras(self):
+        self.extras_open = False
+        self.dev_open = False
+        self.dev_clicks = 0
+        self.dev_note = ""
+        self.audio.play("menuclick")
+
+    def toggle_extra(self, key):
+        self.extras[key] = not self.extras.get(key, False)
+        if key == "zen" and self.extras["zen"]:
+            self.extra_clock = ENDLESS      # zen has no clock, ever
+        self.audio.play("menuclick")
+
+    def set_extra_clock(self, clock):
+        if self.extras.get("zen"):
+            return                          # locked to endless
+        self.extra_clock = clock
+        self.audio.play("menuclick")
+
+    def play_extras(self):
+        if not any(self.extras.values()):
+            self.extras_note = "PICK AT LEAST ONE"
+            return
+        self.extras_open = False
+        self.dev_open = False
+        self.dev_clicks = 0
+        self.dev_note = ""
+        self.start_game(EXTRAS)
 
     def start_game(self, mode):
         """Leave the title screen and begin a run in the chosen mode."""
@@ -2030,7 +2745,8 @@ class Game:
 
         if self.title_ready:
             label = self.font_big.render("CHOOSE A MODE", True, DIM)
-            screen.blit(label, label.get_rect(center=(WIDTH // 2, 410)))
+            # sits clear above the first row of buttons (y=396)
+            screen.blit(label, label.get_rect(center=(WIDTH // 2, 362)))
             for button in self.title_buttons:
                 button.draw(screen, self.font)
         else:
@@ -2039,9 +2755,63 @@ class Game:
             prompt.set_alpha(int(120 + 135 * pulse))
             screen.blit(prompt, prompt.get_rect(center=(WIDTH // 2, 470)))
 
+        if self.extras_open:
+            self.draw_extras(screen)
+        if self.menu_open:
+            self.draw_menu(screen)
+
+        if self.dev_open:
+            self.draw_dev(screen)
+
         credit = self.font_small.render(CREDITS, True, DIM)
         screen.blit(credit, (WIDTH - 20 - credit.get_width(),
                              HEIGHT - 20 - credit.get_height()))
+
+    def draw_extras(self, screen):
+        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        veil.fill((6, 8, 18, 200))
+        screen.blit(veil, (0, 0))
+        box = self.extras_rect()
+        screen.blit(translucent(box.size, PANEL_FILL, PANEL_EDGE, 16),
+                    box.topleft)
+        title = self.font_big.render("EXTRAS", True, TEXT)
+        screen.blit(title, (box.x + 26, box.y + 24))
+        hint = self.font_small.render("PICK ANY", True, DIM)
+        screen.blit(hint, (box.right - 26 - hint.get_width(), box.y + 30))
+
+        for key, rect, label, blurb in self.extra_rows:
+            on = self.extras.get(key, False)
+            screen.blit(translucent(rect.size,
+                                    GOLD + (60,) if on else (255, 255, 255, 18),
+                                    None, 8), rect.topleft)
+            tick = pygame.Rect(rect.x + 8, rect.centery - 10, 20, 20)
+            pygame.draw.rect(screen, TEXT if on else DIM, tick, 2,
+                             border_radius=4)
+            if on:
+                pygame.draw.line(screen, GOLD, (tick.x + 4, tick.centery),
+                                 (tick.centerx, tick.bottom - 5), 3)
+                pygame.draw.line(screen, GOLD, (tick.centerx, tick.bottom - 5),
+                                 (tick.right - 3, tick.y + 3), 3)
+            # label on top, blurb on its own line underneath - a pixel font
+            # is far too wide to fit both side by side
+            name = self.font.render(label, True, TEXT if on else DIM)
+            screen.blit(name, (rect.x + 38, rect.y + 5))
+            note_font = Button.fit(self.font_small, blurb, rect.width - 46)
+            note = note_font.render(blurb, True, DIM)
+            screen.blit(note, (rect.x + 38, rect.y + 5 + name.get_height() + 4))
+
+        zen = self.extras.get("zen")
+        for button in self.extra_buttons:
+            if button.label in (ENDLESS.upper(), TIMED.upper()):
+                button.hover = (not zen and
+                                self.extra_clock.upper() == button.label)
+            button.draw(screen, self.font)
+        if zen:
+            lock = self.font_small.render("ZEN IS ALWAYS ENDLESS", True, DIM)
+            screen.blit(lock, (box.x + 26, self.extra_buttons[0].rect.y - 18))
+        if self.extras_note:
+            warn = self.font_small.render(self.extras_note, True, (255, 150, 150))
+            screen.blit(warn, (box.x + 26, box.bottom - 26))
 
     def reset(self, mode=None):
         if mode is not None:
@@ -2051,6 +2821,7 @@ class Game:
         self.level = 1
         self.level_floor = 0          # score at which the current level began
         self.menu_open = False
+        self.music_open = False
         self.dragging = None
         self.wants_quit = False
         self.hint = None
@@ -2059,28 +2830,83 @@ class Game:
         self.go_left = 0.0
         self.flyers = []
         self.multi_run = False
+        self.move_pending = False
+        self.spent_bombs = set()
+        self.rainbow_targets = []
+        self.rainbow_all = set()
+        self.rainbow_bolts = []
+        self.rainbow_origin = None
+        self.rainbow_done = 0
+        self.rainbow_step = RAINBOW_STEP
         self.shake = 0.0
         self.shake_t = 0.0
         self.frame = None
         self.note = ""
+        self.shape_cells = None
         self.time_left = TIMED_SECONDS
+        self.lock_kind = random.randrange(N_TYPES)
+        self.lock_left = LOCK_SECONDS
         self.over = False
         self.time_pops = []          # floating "+3s" labels
         self.puffs = []              # smoke left by flame gems
         # While the title screen is up its own track keeps playing; the mode
         # playlist only takes over once a game actually starts.
         if not self.on_title:
-            self.audio.use_playlist(self.mode)
+            # an Extras run with the clock on should still get the timed music
+            self.audio.use_playlist(
+                TIMED_MUSIC_MODE if (self.mode == EXTRAS and self.timed)
+                else self.mode)
         self.new_board()
+
+    def apply_extras(self, grid):
+        """Rewrite a freshly built grid to suit the active modifiers."""
+        # MONO is purely cosmetic - the gems are drawn greyscale but keep
+        # their distinct kinds. Forcing them all to one kind would make the
+        # whole board a single enormous match.
+        # Explosives mode does NOT convert gems already on the board - they
+        # arrive as explosives from the top, handled in collapse()/new_grid().
+        return grid
+
+    def pick_shape(self):
+        """A new silhouette for the current Shapes level."""
+        self.shape_cells = shape_mask(random.choice(SHAPE_MASKS))
 
     def new_board(self):
         """Fresh grid for the current level, rained in from above."""
-        self.grid = new_grid(bonuses=self.timed)
+        if self.mode == SHAPES:
+            # the silhouette belongs to the run, not the level - regenerating
+            # it here changed the board shape on every level up
+            if self.shape_cells is None:
+                self.pick_shape()
+            self.grid = new_shapes_grid(bonuses=self.timed,
+                                        mask=self.shape_cells)
+        else:
+            self.grid = self.apply_extras(
+                new_grid(bonuses=self.timed, chaos=self.extra("chaos")))
         self.begin_intro()
+
+    def mode_label(self):
+        if self.mode == EXTRAS:
+            on = [lbl for k, lbl, _ in EXTRA_DEFS if self.extras.get(k)]
+            return on[0] if len(on) == 1 else f"EXTRAS x{len(on)}"
+        if self.mode == SHAPES:
+            return "SHAPES"
+        return "TIMED" if self.timed else "ENDLESS"
+
+    def extra(self, key):
+        """Is this modifier switched on for the current run?"""
+        return self.mode == EXTRAS and self.extras.get(key, False)
 
     @property
     def timed(self):
+        if self.mode == EXTRAS:
+            return self.extra_clock == TIMED and not self.extra("zen")
         return self.mode == TIMED
+
+    @property
+    def scoring(self):
+        """Zen keeps no score, so it also never levels up."""
+        return not self.extra("zen")
 
     def set_mode(self, mode):
         """Switch game mode. Always starts a fresh run, and swaps the music."""
@@ -2162,6 +2988,8 @@ class Game:
     # -- effects ----------------------------------------------------------
 
     def add_shake(self, amount):
+        if not self.settings.get("shake", True):
+            return
         """Kick the camera. Amounts add up but are capped, so a huge cascade
         does not turn into an earthquake."""
         self.shake = min(SHAKE_MAX, self.shake + amount)
@@ -2185,6 +3013,25 @@ class Game:
         self.effects.append(Effect(anim,
                                    BOARD_X + int((c + 0.5) * TILE),
                                    BOARD_Y + int((r + 0.5) * TILE)))
+
+    def puff_cells(self, cells, per_cell=2, force=0.5):
+        """A small amount of smoke spread over many cells.
+
+        Used for a hypercube wipe: a full burst on every gem would be dozens
+        of clouds, so this is deliberately thin and capped.
+        """
+        if not self.smoke:
+            return
+        picks = list(cells)
+        random.shuffle(picks)
+        budget = max(0, MAX_EFFECTS - len(self.puffs))
+        for r, c in picks[:max(1, budget // max(1, per_cell))]:
+            x = BOARD_X + int((c + 0.5) * TILE)
+            y = BOARD_Y + int((r + 0.5) * TILE)
+            for i in range(per_cell):
+                self.puffs.append(Puff(random.choice(self.smoke), x, y,
+                                       angle=random.uniform(0, math.tau),
+                                       force=force))
 
     def spawn_smoke(self, r, c, count=7):
         """A cloud where a flame gem went off.
@@ -2257,7 +3104,10 @@ class Game:
         for r in range(ROWS):
             for c in range(COLS):
                 gem = self.grid[r][c]
-                if gem is None:
+                # A hole is a Gem with cell_type CELL_EMPTY, not None - without
+                # this check a Shapes board throws a flyer from every hole,
+                # drawn as gem kind 0.
+                if gem is None or gem.cell_type == CELL_EMPTY:
                     continue
                 # stagger by distance from the centre so it ripples outward
                 dr, dc = r - (ROWS - 1) / 2, c - (COLS - 1) / 2
@@ -2313,7 +3163,10 @@ class Game:
         """
         if self.over or self.state != "idle":
             return False
-        self.grid = new_grid(bonuses=self.timed)
+        self.grid = (new_shapes_grid(self.timed, self.shape_cells)
+                     if self.mode == SHAPES
+                     else new_grid(bonuses=self.timed,
+                                   chaos=self.extra("chaos")))
         self.audio.play("shuffle")
         self.begin_intro()          # rains the new board in like any other
         return True
@@ -2327,8 +3180,8 @@ class Game:
         self.buttons = [
             Button((x, bottom - 46 * 3 - 20, w, 46), "HINT",
                    self.show_hint, accent=HINT_COLOR),
-            Button((x, bottom - 46 * 2 - 10, w, 46), "SHUFFLE SONG",
-                   self.shuffle_song, accent=(150, 160, 190)),
+            Button((x, bottom - 46 * 2 - 10, w, 46), "MUSIC",
+                   self.open_music, accent=(150, 160, 190)),
             Button((x, bottom - 46, w, 46), "MENU", self.open_menu),
         ]
 
@@ -2340,15 +3193,34 @@ class Game:
             Slider((sx, box.y + 168, sw, 8), "SOUND EFFECTS",
                    lambda: self.audio.sfx_volume, self.audio.set_sfx_volume),
         ]
+        # graphics toggles sit between the sliders and the buttons
+        self.setting_rows = []
+        for i, (key, label, blurb) in enumerate(SETTING_DEFS):
+            self.setting_rows.append(
+                (key, pygame.Rect(sx, box.y + 226 + i * EXTRA_ROW,
+                                  sw, EXTRA_ROW - 6), label, blurb))
+        self.setting_buttons = []
+
         half = (sw - 20) // 2
         self.menu_buttons = [
-            Button((sx, box.y + 210, half, 42), "ENDLESS",
-                   lambda: self.set_mode(ENDLESS), accent=GOLD),
-            Button((sx + half + 20, box.y + 210, half, 42), "TIMED",
-                   lambda: self.set_mode(TIMED), accent=(126, 216, 150)),
-            Button((sx, box.y + 262, half, 42), "RESUME", self.close_menu),
-            Button((sx + half + 20, box.y + 262, half, 42), "QUIT", self.quit,
-                   accent=(232, 92, 92)),
+            Button((sx, self.setting_rows[-1][1].bottom + 14,
+                    sw, 42), "RETURN TO TITLE",
+                   self.return_to_title, accent=GOLD),
+            Button((sx, self.setting_rows[-1][1].bottom + 66, half, 42),
+                   "RESUME", self.close_menu),
+            Button((sx + half + 20, self.setting_rows[-1][1].bottom + 66,
+                    half, 42), "QUIT", self.quit, accent=(232, 92, 92)),
+        ]
+
+        picker = self.music_rect()
+        self.music_list = ScrollList((picker.x + 24, picker.y + 76,
+                                      picker.width - 48, picker.height - 150))
+        pw = picker.width - 48
+        self.music_buttons = [
+            Button((picker.x + 24, picker.bottom - 62, pw, 44), "CLOSE",
+                   self.close_music,
+                   art=self.skinned("menubutton", (pw, 44)),
+                   art_hover=self.skinned("menubuttonhovered", (pw, 44))),
         ]
 
         over = self.over_rect()
@@ -2357,9 +3229,13 @@ class Game:
         self.over_buttons = [
             Button((ox, over.bottom - 74, third, 46), "PLAY AGAIN",
                    lambda: self.reset(self.mode), accent=(126, 216, 150)),
-            Button((ox + third + 20, over.bottom - 74, third, 46), "ENDLESS",
-                   lambda: self.set_mode(ENDLESS), accent=GOLD),
+            Button((ox + third + 20, over.bottom - 74, third, 46), "TITLE",
+                   self.return_to_title, accent=GOLD),
         ]
+
+    @staticmethod
+    def music_rect():
+        return pygame.Rect(WIDTH // 2 - 230, HEIGHT // 2 - 220, 460, 440)
 
     @staticmethod
     def over_rect():
@@ -2367,7 +3243,7 @@ class Game:
 
     @staticmethod
     def menu_rect():
-        return pygame.Rect(WIDTH // 2 - 220, HEIGHT // 2 - 180, 440, 350)
+        return pygame.Rect(WIDTH // 2 - 230, 70, 460, 580)
 
     # -- button actions ---------------------------------------------------
 
@@ -2380,9 +3256,29 @@ class Game:
         if self.hint is None:
             self.secret_shuffle()
 
-    def shuffle_song(self):
-        name = self.audio.random_track()
-        self.note = f"now playing: {name}" if name else "no music loaded"
+    def open_music(self):
+        """Song picker. Choosing one plays it, then the shuffle resumes."""
+        self.music_open = True
+        self.menu_open = False
+        self.sel = None
+        self.dragging = None
+        self.music_list.items = self.audio.track_names()
+        playing = self.audio.now_playing()
+        self.music_list.current = (self.music_list.items.index(playing)
+                                   if playing in self.music_list.items else -1)
+        self.music_list.offset = 0.0
+
+    def close_music(self):
+        self.music_open = False
+
+    def return_to_title(self):
+        self.menu_open = False
+        self.music_open = False
+        self.over = False
+        self.on_title = True
+        self.title_ready = False
+        self.audio.chosen = None
+        self.audio.use_playlist(TITLE)
 
     def open_menu(self):
         self.menu_open = True
@@ -2408,11 +3304,39 @@ class Game:
 
     def widgets_at(self, pos):
         """Whatever interactive thing is under the cursor, overlays first."""
+        if self.on_title and self.settings_open:
+            for slider in self.setting_sliders:
+                if slider.hit(pos):
+                    return slider
+            for button in self.setting_buttons:
+                if button.hit(pos):
+                    return button
+            return None
+        if self.on_title and self.extras_open:
+            for button in self.extra_buttons:
+                if button.hit(pos):
+                    return button
+            return None
         if self.on_title:
+            if self.menu_open:
+                for button in self.title_buttons:
+                    button.hover = False
+                for slider in self.sliders:
+                    if slider.hit(pos):
+                        return slider
+                for button in self.menu_buttons:
+                    if button.hit(pos):
+                        return button
+                return None
             if self.title_ready:
                 for button in self.title_buttons:
                     if button.hit(pos):
                         return button
+            return None
+        if self.music_open:
+            for button in self.music_buttons:
+                if button.hit(pos):
+                    return button
             return None
         if self.over:
             for button in self.over_buttons:
@@ -2433,10 +3357,48 @@ class Game:
         return None
 
     def on_down(self, pos):
-        if self.on_title and not self.title_ready:
+        if self.on_title and self.dev_open:
+            row = self.dev_sounds.index_at(pos)
+            if row >= 0:
+                self.audio.play(self.dev_sounds.items[row])
+                self.dev_sounds.current = row
+                self.dev_note = f"played {self.dev_sounds.items[row]}"
+                return
+            for button in self.dev_buttons:
+                if button.hit(pos):
+                    button.down = True
+                    return
+            if not self.dev_rect().collidepoint(pos):
+                self.close_dev()
+            return
+
+        if self.on_title and self.logo_rect().collidepoint(pos):
+            self.dev_clicks += 1
+            if self.dev_clicks >= DEV_CLICKS:
+                self.dev_clicks = 0
+                self.open_dev()
+                return
+
+        if self.on_title and self.extras_open:
+            for key, rect, _, _ in self.extra_rows:
+                if rect.collidepoint(pos):
+                    self.toggle_extra(key)
+                    self.extras_note = ""
+                    return
+            # no row hit: fall through so the buttons below still work
+        elif self.on_title and not self.title_ready:
             self.title_ready = True        # first click reveals the modes
             self.audio.play("menuclick")
             return
+        # the graphics toggles live in the menu, which is reachable from both
+        # the title screen and the board - so this must come before any
+        # on_title early return
+        if self.menu_open:
+            for key, rect, _, _ in self.setting_rows:
+                if rect.collidepoint(pos):
+                    self.toggle_setting(key)
+                    return
+
         hit = self.widgets_at(pos)
         if isinstance(hit, Slider):
             self.dragging = hit
@@ -2448,10 +3410,29 @@ class Game:
             self.audio.play("menuclick")
             return
         if self.on_title:
+            if self.menu_open and not self.menu_rect().collidepoint(pos):
+                self.audio.play("menuclick")
+                self.close_menu()
+            return
+        if self.music_open:
+            row = self.music_list.index_at(pos)
+            if row >= 0:
+                self.audio.play("menuclick")
+                name = self.audio.play_chosen(row)
+                self.music_list.current = row
+                if name:
+                    self.note = f"playing {name}"
+            elif not self.music_rect().collidepoint(pos):
+                self.audio.play("menuclick")
+                self.close_music()
             return
         if self.over:
             return                     # nothing but those two buttons is live
         if self.menu_open:
+            for key, rect, _, _ in self.setting_rows:
+                if rect.collidepoint(pos):
+                    self.toggle_setting(key)
+                    return
             if not self.menu_rect().collidepoint(pos):
                 self.audio.play("menuclick")
                 self.close_menu()      # click outside the box dismisses it
@@ -2478,7 +3459,9 @@ class Game:
             self.dragging.set_from(pos)
             return
         if self.on_title:
-            active = self.title_buttons if self.title_ready else []
+            active = ([] if self.menu_open
+                      else self.extra_buttons if self.extras_open
+                      else (self.title_buttons if self.title_ready else []))
         elif self.over:
             active = self.over_buttons
         elif self.menu_open:
@@ -2486,7 +3469,8 @@ class Game:
         else:
             active = self.buttons
         for button in (self.buttons + self.menu_buttons + self.over_buttons
-                       + self.title_buttons):
+                       + self.title_buttons + self.setting_buttons
+                       + self.extra_buttons):
             button.hover = button in active and button.hit(pos)
 
     def on_up(self, pos):
@@ -2496,7 +3480,9 @@ class Game:
 
         fired = None
         for button in (self.buttons + self.menu_buttons + self.over_buttons
-                       + self.title_buttons):
+                       + self.title_buttons + self.music_buttons
+                       + self.extra_buttons + self.dev_buttons
+                       + self.setting_buttons):
             if button.down and button.hit(pos):
                 fired = button
             button.down = False
@@ -2504,7 +3490,8 @@ class Game:
             fired.action()
             return
 
-        if self.over or self.menu_open or self.state != "idle" or self.press is None:
+        if (self.over or self.menu_open or self.music_open
+                or self.state != "idle" or self.press is None):
             return
         cell = self.cell_at(pos)
         if cell is not None and cell != self.press and adjacent(self.press, cell):
@@ -2512,6 +3499,11 @@ class Game:
         self.press = None
 
     def begin_swap(self, a, b):
+        for r, c in (a, b):
+            cell = self.grid[r][c]
+            if cell is None or cell.cell_type == CELL_EMPTY:
+                return             # nothing may move into a blacked-out cell
+        self.move_pending = True          # this is a player move, fuses tick
         self.hint = None
         self.hint_left = 0.0
         self.pair = (a, b)
@@ -2530,6 +3522,7 @@ class Game:
         self.time += dt
         if self.on_title:
             return
+        self.update_motes(dt)
         if self.effects:
             self.effects = [e for e in self.effects if e.update(dt)]
         if self.go_left > 0:
@@ -2545,12 +3538,20 @@ class Game:
 
         # The clock only runs while the board is actually playable. Opening
         # the menu pauses it - otherwise adjusting the volume costs you time.
-        if (self.timed and not self.over and not self.menu_open
+        if (self.timed and not self.over
+                and not self.menu_open and not self.music_open
+                and not getattr(self, "dev_open", False)
                 and self.state not in PAUSED_STATES):
             self.time_left -= dt
             if self.time_left <= 0:
                 self.time_left = 0.0
                 self.end_game()
+        if self.extra("lock") and self.state == "idle" and not self.over:
+            self.lock_left -= dt
+            if self.lock_left <= 0:
+                choices = [k for k in range(N_TYPES) if k != self.lock_kind]
+                self.lock_kind = random.choice(choices or [self.lock_kind])
+                self.lock_left = LOCK_SECONDS
         if self.hint_left > 0:
             self.hint_left = max(0.0, self.hint_left - dt)
             if self.hint_left == 0:
@@ -2561,6 +3562,10 @@ class Game:
                 del self.pops[cell]
 
         if self.state == "idle":
+            return
+
+        if self.state == "rainbow":
+            self.update_rainbow(dt)
             return
 
         if self.state == "flyoff":
@@ -2625,6 +3630,97 @@ class Game:
             else:
                 self.settle()
 
+    def begin_rainbow(self, hyper, targets):
+        """Charge, then zap each target in turn.
+
+        The gems are removed from the board progressively so the wipe reads
+        as the rainbow gem doing the work, rather than everything vanishing
+        at once.
+        """
+        cx = BOARD_X + (hyper[1] + 0.5) * TILE
+        cy = BOARD_Y + (hyper[0] + 0.5) * TILE
+        ordered = sorted(targets, key=lambda rc: math.hypot(
+            BOARD_X + (rc[1] + 0.5) * TILE - cx,
+            BOARD_Y + (rc[0] + 0.5) * TILE - cy))
+        self.rainbow_origin = hyper
+        self.rainbow_targets = ordered
+        self.rainbow_done = 0
+        self.rainbow_bolts = []
+        self.rainbow_all = set(targets)
+        step = min(RAINBOW_STEP,
+                   max(0.02, (RAINBOW_MAX - RAINBOW_CHARGE) / max(1, len(ordered))))
+        self.rainbow_step = step
+        self.state = "rainbow"
+        self.t = 0.0
+        self.add_shake(SHAKE_RAINBOW)
+        self.audio.play("rainbowcharge")
+
+    def update_rainbow(self, dt):
+        self.t += dt
+        self.rainbow_bolts = [b for b in self.rainbow_bolts if b[2] > 0]
+        self.rainbow_bolts = [(a, b, life - dt) for a, b, life in self.rainbow_bolts]
+
+        if self.t < RAINBOW_CHARGE:
+            return
+        want = int((self.t - RAINBOW_CHARGE) / self.rainbow_step)
+        want = min(want, len(self.rainbow_targets))
+        while self.rainbow_done < want:
+            r, c = self.rainbow_targets[self.rainbow_done]
+            self.rainbow_done += 1
+            self.rainbow_bolts.append((self.rainbow_origin, (r, c), 0.16))
+            self.spawn_effect("match", r, c)
+            if self.rainbow_done % ZAP_EVERY == 0:
+                self.audio.play("rainbowzap")
+                self.add_shake(SHAKE_RAINBOW * 0.16)
+            if self.smoke and len(self.puffs) < MAX_EFFECTS:
+                x = BOARD_X + int((c + 0.5) * TILE)
+                y = BOARD_Y + int((r + 0.5) * TILE)
+                self.puffs.append(Puff(random.choice(self.smoke), x, y,
+                                       angle=random.uniform(0, math.tau),
+                                       force=0.45))
+
+        if (self.rainbow_done >= len(self.rainbow_targets)
+                and self.t >= RAINBOW_CHARGE
+                + len(self.rainbow_targets) * self.rainbow_step + RAINBOW_TAIL):
+            targets = self.rainbow_all
+            self.rainbow_all = set()
+            self.rainbow_targets = []
+            self.cascade = 1
+            self.multi_run = False
+            self.begin_clear(targets, {})
+
+    def draw_rainbow(self, screen):
+        """Lightning from the rainbow gem to everything it is destroying."""
+        layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        charge = clamp01(self.t / RAINBOW_CHARGE)
+        for (ar, ac), (br, bc), life in self.rainbow_bolts:
+            x1 = BOARD_X + (ac + 0.5) * TILE
+            y1 = BOARD_Y + (ar + 0.5) * TILE
+            x2 = BOARD_X + (bc + 0.5) * TILE
+            y2 = BOARD_Y + (br + 0.5) * TILE
+            alpha = int(235 * clamp01(life / 0.16))
+            hue = (self.time * 0.7 + ar * 0.07 + ac * 0.05) % 1.0
+            col = tuple(int(v * 255) for v in colorsys.hsv_to_rgb(hue, 0.55, 1.0))
+            points = [(x1, y1)]
+            segments = 5
+            for i in range(1, segments):
+                f = i / segments
+                jitter = (1.0 - abs(f - 0.5) * 2) * TILE * 0.42
+                points.append((x1 + (x2 - x1) * f + random.uniform(-jitter, jitter),
+                               y1 + (y2 - y1) * f + random.uniform(-jitter, jitter)))
+            points.append((x2, y2))
+            pygame.draw.lines(layer, col + (alpha,), False, points, 3)
+            pygame.draw.lines(layer, (255, 255, 255, alpha), False, points, 1)
+        # the gem itself glowing harder as it charges
+        if self.rainbow_origin is not None:
+            x = BOARD_X + (self.rainbow_origin[1] + 0.5) * TILE
+            y = BOARD_Y + (self.rainbow_origin[0] + 0.5) * TILE
+            pulse = 0.5 + 0.5 * math.sin(self.time * 30)
+            radius = int(TILE * (0.35 + 0.5 * charge + 0.1 * pulse))
+            pygame.draw.circle(layer, (255, 255, 255, int(70 + 120 * charge)),
+                               (int(x), int(y)), radius, 4)
+        screen.blit(layer, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+
     def resolve_swap(self):
         a, b = self.pair
         ga = self.grid[a[0]][a[1]]
@@ -2634,11 +3730,15 @@ class Game:
         if ga.power == HYPER or gb.power == HYPER:
             hyper, other = (a, b) if ga.power == HYPER else (b, a)
             both = ga.power == HYPER and gb.power == HYPER
-            self.cascade = 1
-            self.begin_clear(hyper_targets(self.grid, hyper, other), {})
-            self.note = "BOARD WIPE!" if both else "HYPERCUBE!"
-            self.spawn_effect("hyper", *hyper)
-            self.audio.play("hyper")
+            targets = hyper_targets(self.grid, hyper, other)
+            # Actually complete the swap so the rainbow gem ends up in the
+            # square it was dragged into, rather than snapping back and
+            # detonating from where it started.
+            self.apply_swap()
+            origin = other
+            self.note = "BOARD WIPE!" if both else "RAINBOW!"
+            self.spawn_effect("hyper", *origin)
+            self.begin_rainbow(origin, targets)
             return
 
         self.apply_swap()
@@ -2686,9 +3786,18 @@ class Game:
                 self.spawn_smoke(r, c)
             else:
                 self.spawn_effect("match", r, c)
-        gained = len(cells) * POINTS_PER_GEM * self.cascade
-        for power in spawns.values():
-            gained += HYPER_BONUS if power == HYPER else FLAME_BONUS
+        if not self.scoring:
+            gained = 0
+        elif self.extra("lock"):
+            # only the locked colour pays out
+            gained = sum(POINTS_PER_GEM * self.cascade for r, c in cells
+                         if self.grid[r][c] is not None
+                         and self.grid[r][c].kind == self.lock_kind)
+        else:
+            gained = len(cells) * POINTS_PER_GEM * self.cascade
+        if self.scoring:
+            for power in spawns.values():
+                gained += HYPER_BONUS if power == HYPER else FLAME_BONUS
         self.score += gained
 
         self.audio.play_match(self.cascade, self.multi_run)
@@ -2696,6 +3805,7 @@ class Game:
             self.audio.play("hypermade" if power == HYPER else "flamemade")
         if any(self.grid[r][c] is not None and self.grid[r][c].power == FLAME
                for r, c in cells):
+            self.add_shake(SHAKE_FLAME)
             self.audio.play("explode")
         if HYPER in spawns.values():
             self.note = "HYPERCUBE!"
@@ -2717,30 +3827,151 @@ class Game:
             self.pops[(r, c)] = POP_TIME
         self.matched = set()
         self.spawns = {}
-        self.falls = collapse(self.grid, bonuses=self.timed)
+        self.falls = collapse(self.grid, bonuses=self.timed,
+                              chaos=self.extra("chaos"),
+                              shapes=self.mode == SHAPES,
+                              boom=self.extra("boom"),
+                              mask=getattr(self, "shape_cells", None))
+        self.apply_extras(self.grid)
         self.audio.play("falling")
         self.state = "fall"
+
+    def tick_bombs(self):
+        """Count every bomb down one move, and set off any that reach zero.
+
+        Returns the cells the detonation clears, or None if nothing went off.
+        """
+        live = [(r, c) for r in range(ROWS) for c in range(COLS)
+                if self.grid[r][c] is not None
+                and self.grid[r][c].cell_type == CELL_BOMB]
+        if not live:
+            return None
+        spent = set()
+        for r, c in live:
+            gem = self.grid[r][c]
+            gem.fuse = max(0, gem.fuse - 1)
+            if gem.fuse == 0:
+                spent.add((r, c))
+        self.spent_bombs = spent
+        if not spent:
+            return None
+        return detonate(self.grid, spent)
 
     def settle(self):
         self.pair = None
         self.cascade = 0
-        if self.level_progress() >= 1.0:
+        # Only a move the player made counts down a fuse. settle() also runs
+        # at the end of every cascade step, which would otherwise burn several
+        # moves off every bomb for a single swap.
+        blast = self.tick_bombs() if self.move_pending else None
+        self.move_pending = False
+        if blast:
+            self.cascade = 1
+            self.multi_run = False
+            self.note = "BOOM!"
+            self.add_shake(SHAKE_BOMB)
+            self.audio.play("explode")
+            for r, c in self.spent_bombs:
+                self.spawn_effect("explode", r, c)
+                self.spawn_smoke(r, c)
+            self.begin_clear(blast, {})
+            return
+        if self.scoring and self.level_progress() >= 1.0:
             self.begin_levelup()
             return
         if not has_move(self.grid):
-            self.grid = new_grid()
+            if self.mode == SHAPES:
+                # a Shapes board is fixed: running out of moves ends the run
+                self.note = "NO MOVES LEFT"
+                self.end_game()
+                return
+            self.grid = new_grid(bonuses=self.timed,
+                                 chaos=self.extra("chaos"),
+                                 shapes=self.mode == SHAPES)
             self.note = "no moves - reshuffled"
             self.audio.play("shuffle")
         self.state = "idle"
 
     # -- drawing ----------------------------------------------------------
 
+    @staticmethod
+    def greyscale(sprite):
+        """Desaturate a sprite without needing numpy.
+
+        pygame.surfarray requires numpy, which is not installed everywhere,
+        so this uses the built-in transform when available and falls back to
+        a plain per-pixel pass. Only runs once per gem at startup.
+        """
+        try:
+            return pygame.transform.grayscale(sprite)
+        except (AttributeError, pygame.error):
+            pass
+
+        out = sprite.copy()
+        out.lock()
+        width, height = out.get_size()
+        for x in range(width):
+            for y in range(height):
+                r, g, b, a = out.get_at((x, y))
+                if a:
+                    lum = int(r * 0.30 + g * 0.59 + b * 0.11)
+                    out.set_at((x, y), (lum, lum, lum, a))
+        out.unlock()
+        return out
+
     def sprite_for(self, gem):
+        if gem.cell_type == CELL_EMPTY:
+            return self.blank_tile
+        # rocks and bombs are not gems: they have their own artwork and are
+        # never recoloured by mono or drawn as a gem kind
+        if gem.cell_type == CELL_ROCK:
+            return self.chaos_art.get("rock") or self.fallback_block((150, 146, 138))
+        if gem.cell_type == CELL_BOMB:
+            return self.chaos_art.get("bomb") or self.fallback_block((60, 60, 66))
         if gem.power == HYPER:
             return self.hyper
+        mono = self.extra("mono")
         if gem.power == FLAME:
-            return self.flame[gem.kind]
-        return self.normal[gem.kind]
+            return (self.mono_flame if mono else self.flame)[gem.kind]
+        return (self.mono_normal if mono else self.normal)[gem.kind]
+
+    def fallback_block(self, colour):
+        """Drawn shape for a rock or bomb when its art is missing, so the
+        cell is still visibly not a gem rather than invisible."""
+        key = colour
+        cached = self._blocks.get(key)
+        if cached is None:
+            cached = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
+            pad = GEM_PAD + 3
+            pygame.draw.rect(cached, colour,
+                             (pad, pad, TILE - pad * 2, TILE - pad * 2),
+                             border_radius=10)
+            pygame.draw.rect(cached, tuple(int(v * 0.6) for v in colour),
+                             (pad, pad, TILE - pad * 2, TILE - pad * 2), 3,
+                             border_radius=10)
+            self._blocks[key] = cached
+        return cached
+
+    def draw_fuse(self, screen, gem, x, y):
+        """The move counter on a bomb, and a warning pulse when it is close."""
+        if gem.cell_type != CELL_BOMB:
+            return
+        fuse = max(0, int(getattr(gem, "fuse", 0)))
+        hot = fuse <= 2
+        pulse = 0.5 + 0.5 * math.sin(self.time * (7.0 if hot else 3.0))
+        if hot:
+            ring = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
+            pygame.draw.rect(ring, (255, 90, 70, int(90 + 110 * pulse)),
+                             (2, 2, TILE - 4, TILE - 4), 3, border_radius=10)
+            screen.blit(ring, (int(x), int(y)))
+        label = self.font_big.render(str(fuse), True, (255, 255, 255))
+        pad = 5
+        w = label.get_width() + pad * 2
+        h = label.get_height() + 2
+        chip = translucent((w, h), (200, 60, 50, 235) if hot
+                           else (30, 34, 48, 225), None, h // 2)
+        chip.blit(label, (pad, 1))
+        screen.blit(chip, (int(x + (TILE - w) / 2), int(y + TILE - h - 4)))
 
     def draw_behind(self, screen, gem, x, y):
         """Whatever sits *under* a special gem: fire, or the power-gem halo."""
@@ -2796,6 +4027,16 @@ class Game:
         x = BOARD_X + c * TILE
         y = BOARD_Y + r * TILE
         scale = 1.0
+
+        if (self.state == "rainbow" and (r, c) == self.rainbow_origin
+                and self.t < RAINBOW_CHARGE):
+            # the gem rattles harder as it winds up
+            wind = clamp01(self.t / RAINBOW_CHARGE)
+            amp = 1.5 + 6.5 * wind * wind
+            x += math.sin(self.t * 58.0) * amp
+            y += math.cos(self.t * 47.0) * amp * 0.8
+            scale = 1.0 + 0.16 * wind
+            return x, y, scale
 
         if self.state in ("swap", "swapback") and self.pair and (r, c) in self.pair:
             a, b = self.pair
@@ -2873,6 +4114,22 @@ class Game:
         x = PANEL_X + 16
         width = PANEL_W - 32
 
+        if not self.scoring:
+            # Zen keeps no score, so the readouts would only ever show 0
+            zen = self.font_score.render("ZEN", True, GOLD)
+            screen.blit(zen, (x, PANEL_Y + 40))
+            for button in self.buttons:
+                button.draw(screen, self.font)
+            if self.note:
+                self.wrapped(screen, self.note, x, PANEL_Y + 208, width, GOLD)
+            track = self.audio.now_playing()
+            if track:
+                screen.blit(self.font_small.render("NOW PLAYING", True, DIM),
+                            (x, PANEL_Y + PANEL_H - 250))
+                self.wrapped(screen, track, x, PANEL_Y + PANEL_H - 232,
+                             width, DIM)
+            return
+
         screen.blit(self.font_small.render("SCORE", True, DIM), (x, PANEL_Y + 26))
         screen.blit(self.font_score.render(f"{self.score:,}", True, TEXT),
                     (x, PANEL_Y + 48))
@@ -2900,6 +4157,18 @@ class Game:
         # indication of how close the next level was.
         self.bar(screen, x, PANEL_Y + (200 if self.timed else 184), width, 10,
                  self.level_progress(), GOLD)
+
+        if self.extra("lock"):
+            y = PANEL_Y + 250
+            screen.blit(self.font_small.render("SCORING", True, DIM), (x, y))
+            sprite = self.normal[self.lock_kind]
+            screen.blit(sprite, (x, y + 20))
+            secs = max(0, int(math.ceil(self.lock_left)))
+            screen.blit(self.font_score.render(str(secs), True,
+                        (232, 96, 96) if secs <= 3 else TEXT),
+                        (x + TILE + 12, y + 36))
+            self.bar(screen, x, y + TILE + 26, width, 8,
+                     self.lock_left / LOCK_SECONDS, (176, 140, 240))
 
         mode = self.font_small.render("TIMED" if self.timed else "ENDLESS",
                                       True, DIM)
@@ -2932,6 +4201,23 @@ class Game:
                 line = trial
         if line:
             screen.blit(self.font_small.render(line, True, color), (x, y))
+
+    def draw_holes(self, screen, opaque=False):
+        """Black out the cells that are not part of a Shapes silhouette.
+
+        Drawn twice: once under the gems so the board reads as a shape, and
+        again over them, because a gem falling into a lower row passes
+        visually through any hole above it.
+        """
+        if self.mode != SHAPES:
+            return
+        shade = (0, 0, 0, 255) if opaque else (0, 0, 0, 150)
+        tile = translucent((TILE, TILE), shade, None, 0)
+        for r in range(ROWS):
+            for c in range(COLS):
+                cell = self.grid[r][c]
+                if cell is not None and cell.cell_type == CELL_EMPTY:
+                    screen.blit(tile, (BOARD_X + c * TILE, BOARD_Y + r * TILE))
 
     def draw_hint(self, screen):
         if not self.hint or self.hint_left <= 0:
@@ -3004,6 +4290,21 @@ class Game:
         for button in self.over_buttons:
             button.draw(screen, self.font)
 
+    def draw_music(self, screen):
+        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        veil.fill((8, 9, 13, 190))
+        screen.blit(veil, (0, 0))
+        box = self.music_rect()
+        screen.blit(translucent(box.size, PANEL_FILL, PANEL_EDGE, 16),
+                    box.topleft)
+        title = self.font_big.render("MUSIC", True, TEXT)
+        screen.blit(title, (box.x + 24, box.y + 24))
+        hint = self.font_small.render("SCROLL WHEEL", True, DIM)
+        screen.blit(hint, (box.right - 24 - hint.get_width(), box.y + 30))
+        self.music_list.draw(screen, self.font)
+        for button in self.music_buttons:
+            button.draw(screen, self.font)
+
     def draw_menu(self, screen):
         veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         veil.fill((8, 9, 13, 190))
@@ -3021,12 +4322,50 @@ class Game:
         screen.blit(hint, (box.right - 30 - hint.get_width(),
                            box.y + 26 + title.get_height() - hint.get_height()))
 
-        current = self.font_small.render("MODE", True, DIM)
-        screen.blit(current, (box.x + 30, box.y + 190))
+        for key, rect, label, blurb in self.setting_rows:
+            on = self.settings.get(key, True)
+            screen.blit(translucent(rect.size,
+                                    GOLD + (60,) if on else (255, 255, 255, 18),
+                                    None, 8), rect.topleft)
+            tick = pygame.Rect(rect.x + 8, rect.centery - 10, 20, 20)
+            pygame.draw.rect(screen, TEXT if on else DIM, tick, 2,
+                             border_radius=4)
+            if on:
+                pygame.draw.line(screen, GOLD, (tick.x + 4, tick.centery),
+                                 (tick.centerx, tick.bottom - 5), 3)
+                pygame.draw.line(screen, GOLD, (tick.centerx, tick.bottom - 5),
+                                 (tick.right - 3, tick.y + 3), 3)
+            name = self.font.render(label, True, TEXT if on else DIM)
+            screen.blit(name, (rect.x + 38, rect.y + 5))
+            note = Button.fit(self.font_small, blurb, rect.width - 46)
+            screen.blit(note.render(blurb, True, DIM),
+                        (rect.x + 38, rect.y + 5 + name.get_height() + 4))
 
         for slider in self.sliders:
             slider.draw(screen, self.font, self.font_small,
                         dragging=self.dragging is slider)
+
+        head = self.font_small.render("GRAPHICS", True, DIM)
+        screen.blit(head, (box.x + 30, box.y + 210))
+        for key, rect, label, blurb in self.setting_rows:
+            on = self.settings.get(key, True)
+            screen.blit(translucent(rect.size,
+                                    GOLD + (60,) if on else (255, 255, 255, 18),
+                                    None, 8), rect.topleft)
+            tick = pygame.Rect(rect.x + 8, rect.centery - 10, 20, 20)
+            pygame.draw.rect(screen, TEXT if on else DIM, tick, 2,
+                             border_radius=4)
+            if on:
+                pygame.draw.line(screen, GOLD, (tick.x + 4, tick.centery),
+                                 (tick.centerx, tick.bottom - 5), 3)
+                pygame.draw.line(screen, GOLD, (tick.centerx, tick.bottom - 5),
+                                 (tick.right - 3, tick.y + 3), 3)
+            name = self.font.render(label, True, TEXT if on else DIM)
+            screen.blit(name, (rect.x + 38, rect.y + 5))
+            note = Button.fit(self.font_small, blurb, rect.width - 46)
+            screen.blit(note.render(blurb, True, DIM),
+                        (rect.x + 38, rect.y + 5 + name.get_height() + 4))
+
         for button in self.menu_buttons:
             button.draw(screen, self.font)
 
@@ -3071,6 +4410,10 @@ class Game:
     def draw_transition(self, screen):
         """Gems flying off, then the LEVEL banner over an empty board."""
         self.draw_scene(screen)          # background, panel, empty board
+        if self.state == "rainbow":
+            self.update_rainbow(dt)
+            return
+
         if self.state == "flyoff":
             for flyer in self.flyers:
                 flyer.draw(screen)
@@ -3092,6 +4435,25 @@ class Game:
         screen.blit(label, label.get_rect(
             center=(cx, cy + image.get_height() // 2 + 26)))
 
+    def update_motes(self, dt):
+        if not self.settings.get("particles", True):
+            return
+        for m in self.motes:
+            m[0] += math.sin(self.time * 0.4 + m[2]) * 6 * dt
+            m[1] += m[3] * dt
+            if m[1] < -m[2]:
+                m[1] = HEIGHT + m[2]
+                m[0] = random.uniform(0, WIDTH)
+
+    def draw_motes(self, screen):
+        if not self.settings.get("particles", True):
+            return
+        layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        for x, y, size, _, alpha in self.motes:
+            pygame.draw.circle(layer, (150, 175, 255, int(alpha * 30)),
+                               (int(x), int(y)), max(1, int(size)))
+        screen.blit(layer, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+
     def draw_scene(self, screen, background=True):
         if not background:
             screen.fill((0, 0, 0, 0))       # UI only, on transparency
@@ -3101,9 +4463,12 @@ class Game:
                 screen.fill(BG)
             else:
                 screen.blit(photo, (0, 0))
+        self.draw_motes(screen)
         self.draw_panel(screen)
 
         screen.blit(self.board_bg, (BOARD_X, BOARD_Y))
+        if self.mode == SHAPES:
+            self.draw_holes(screen)
 
         if self.sel is not None:
             r, c = self.sel
@@ -3117,11 +4482,16 @@ class Game:
         for r in range(ROWS):
             for c in range(COLS):
                 gem = self.grid[r][c]
-                if gem is None:
-                    continue
+                if gem is None or gem.cell_type == CELL_EMPTY:
+                    continue          # a hole in a Shapes board: show nothing
+                if (self.state == "rainbow"
+                        and (r, c) in self.rainbow_all
+                        and (r, c) in self.rainbow_targets[:self.rainbow_done]):
+                    continue          # already zapped
                 x, y, scale = self.gem_draw_info(r, c)
                 sprite = self.sprite_for(gem)
-                if gem.power != NORMAL and scale > 0.05:
+                if (gem.cell_type == CELL_GEM and gem.power != NORMAL
+                        and scale > 0.05):
                     self.draw_behind(screen, gem, x, y)
                 if abs(scale - 1.0) > 0.001:
                     if scale <= 0.02:
@@ -3131,7 +4501,9 @@ class Game:
                     x += (TILE - s) / 2
                     y += (TILE - s) / 2
                 screen.blit(sprite, (int(x), int(y)))
-                if gem.bonus:
+                if gem.cell_type == CELL_BOMB:
+                    self.draw_fuse(screen, gem, x, y)
+                elif gem.bonus:
                     self.draw_bonus_tag(screen, x, y)
         for puff in self.puffs:
             puff.draw(screen)
@@ -3140,6 +4512,9 @@ class Game:
         for pop in self.time_pops:
             pop.draw(screen, self.font_big)
         screen.set_clip(clip)
+        if self.state == "rainbow":
+            self.draw_rainbow(screen)
+        self.draw_holes(screen, opaque=True)
         self.draw_hint(screen)
         if self.go_left > 0:
             self.draw_go(screen)
@@ -3148,6 +4523,8 @@ class Game:
             self.draw_levelup(screen)
         if self.menu_open:
             self.draw_menu(screen)
+        if self.music_open:
+            self.draw_music(screen)
         if self.over:
             self.draw_over(screen)
 
@@ -3218,7 +4595,11 @@ def main():
                 sys.exit()
             elif e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_ESCAPE:
-                    if game.menu_open:
+                    if game.dev_open:
+                        game.close_dev()
+                    elif game.music_open:
+                        game.close_music()
+                    elif game.menu_open:
                         game.close_menu()
                     else:
                         game.open_menu()
@@ -3235,7 +4616,7 @@ def main():
                 elif e.key == pygame.K_h:
                     game.show_hint()
                 elif e.key == pygame.K_n:
-                    game.shuffle_song()
+                    game.open_music()
                 elif e.key == pygame.K_t:
                     game.set_mode(TIMED if game.mode == ENDLESS else ENDLESS)
             elif e.type == MUSIC_END:
@@ -3246,6 +4627,10 @@ def main():
                 game.on_up(e.pos)
             elif e.type == pygame.MOUSEMOTION:
                 game.on_motion(e.pos)
+            elif e.type == pygame.MOUSEWHEEL and game.music_open:
+                game.music_list.scroll(-e.y)
+            elif e.type == pygame.MOUSEWHEEL and game.dev_open:
+                game.dev_sounds.scroll(-e.y)
 
         if game.wants_quit:
             pygame.quit()
