@@ -115,7 +115,7 @@ EXTRA_DEFS = (
     ("zen",     "ZEN",            "No Clock/Score"),
     ("mono",    "MONO",           "Black & White"),
     ("boom",    "EXPLOSIVES",     "Explosive Gems Spawn Freely"),
-    ("lock",    "COLOUR LOCK",    "One color scores (Swaps every 10s)"),
+    ("lock",    "COLOR LOCK",    "One Color Scores (Swaps Every 10s)"),
     ("chaos",   "CHAOS",          "???"),
 )
 LOCK_SECONDS = 10.0
@@ -124,12 +124,11 @@ LOCK_SECONDS = 10.0
 SETTING_DEFS = (
     ("fullscreen",  "FULLSCREEN",   "Fills Screen to Aspect Ratio"),
     ("backgrounds", "BACKGROUNDS",  "Show Level Artwork"),
-    ("smooth",      "SMOOTH ANIMATION", "Bounce and Wobble Effect"),
+    ("smooth",      "SMOOTH ANIMATION", "Smooth Gem Animations"),
     ("shake",     "CAMERA SHAKE",        "Screen Shakes on Explosions"),
-    ("particles", "BACKGROUND PARTICLES", "Tiny Particle Effects"),
+    ("particles", "BACKGROUND PARTICLES", "Small Particle Effects"),
 )
 PARTICLE_COUNT = 46
-DEV_CLICKS = 5             # taps on the logo to open developer mode
 
 # rainbow gem detonation: a short charge, then the targets zapped one by one
 RAINBOW_CHARGE = 0.55      # hypercube shaking before anything pops
@@ -169,12 +168,13 @@ BANNER_HOLD = 2.30         # how long it sits there
 BANNER_OUT = 0.55
 DROP_PAUSE = 0.30          # beat between the banner and the new gems
 GO_PAUSE = 0.65            # beat between the gems landing and GO!
-SHAKE_FLYOFF = 2.0
-SHAKE_DECAY = 2.0
-SHAKE_BOMB = 1.5         # a bomb going off
-SHAKE_RAINBOW = 2.5       # the rainbow gem discharging
-SHAKE_FLAME = 1.5          # an explosive gem detonating
-SHAKE_MAX = 5.0
+SHAKE_RAMP = 0.06        # very fast ramp up
+SHAKE_FLYOFF = 4.5       # reduced intensity
+SHAKE_DECAY = 1.8        # much faster decay for quick fade out (was 0.5)
+SHAKE_BOMB = 3.0         # reduced
+SHAKE_RAINBOW = 4.5      # reduced
+SHAKE_FLAME = 3.0        # reduced
+SHAKE_MAX = 10.0         # reduced (was 15.0)
 
 LEVELUP_MIN = 0.9        # floor for the level-up pause, even with no sound
 LEVELUP_MAX = 3.0        # ceiling, so a long track cannot stall the game
@@ -1201,6 +1201,21 @@ def hyper_targets(g, hyper_cell, other_cell):
     cells |= {(r, c) for r in range(ROWS) for c in range(COLS)
               if matchable(g[r][c]) and g[r][c].kind == kind}
     return detonate(g, cells)
+
+
+def rock_bomb_targets(g, hyper_cell, other_cell):
+    """What a rainbow gem destroys when swapped with a rock or bomb.
+    
+    Rainbow + Rock -> destroy all rocks (including the swapped one)
+    Rainbow + Bomb -> destroy all bombs (including the swapped one)
+    """
+    other = g[other_cell[0]][other_cell[1]]
+    cell_type_to_destroy = other.cell_type  # CELL_ROCK or CELL_BOMB
+    targets = {(r, c) for r in range(ROWS) for c in range(COLS)
+               if g[r][c] is not None and g[r][c].cell_type == cell_type_to_destroy}
+    # Ensure the swapped cell itself is included
+    targets.add(other_cell)
+    return targets
 
 
 def find_hint(g):
@@ -2354,8 +2369,8 @@ class Puff:
         self.dy = math.sin(angle) * speed * 0.78 - random.uniform(18, 46)
         self.spin = random.uniform(-95, 95)
         self.life = random.uniform(0.75, 1.25)
-        self.scale0 = random.uniform(0.16, 0.30) * force
-        self.scale1 = self.scale0 * random.uniform(2.6, 4.0)
+        self.scale0 = random.uniform(0.28, 0.50) * force  # bigger starting smoke
+        self.scale1 = self.scale0 * random.uniform(2.6, 4.0)  # scales up more
         self.delay = random.uniform(0.0, 0.14)     # staggered, not one clump
         self.tint = random.randint(196, 255)
         self.t = 0.0
@@ -2384,6 +2399,51 @@ class Puff:
         screen.blit(image, image.get_rect(center=(
             int(self.x + self.dx * travel),
             int(self.y + self.dy * travel - rise))))
+
+
+class ScorePop:
+    """A floating point value that drifts up and fades where a match/explosion occurred."""
+
+    LIFE = 1.4
+    __slots__ = ("x", "y", "t", "points", "is_rainbow")
+
+    def __init__(self, x, y, points, is_rainbow=False):
+        self.x = x
+        self.y = y
+        self.points = points
+        self.is_rainbow = is_rainbow
+        self.t = 0.0
+
+    def update(self, dt):
+        self.t += dt
+        return self.t < self.LIFE
+
+    def draw(self, screen, font):
+        progress = self.t / self.LIFE
+        
+        # White text for regular scores, rainbow for special events
+        if self.is_rainbow:
+            # Cycle through full rainbow using HSV color space
+            # Hue from 0 to 1 represents the full color spectrum
+            hue = progress % 1.0
+            rgb = colorsys.hsv_to_rgb(hue, 0.9, 1.0)
+            color = tuple(int(c * 255) for c in rgb)
+            label = font.render(str(self.points), True, color)
+        else:
+            label = font.render(str(self.points), True, (255, 255, 255))  # white
+        
+        label = label.copy()
+        # Soft fade in over first 0.2s, then fade out
+        fade_in = min(1.0, progress * 5.0)  # quick fade in
+        fade_out = max(0.0, 1.0 - (progress - 0.6) * 1.67)  # fade out from 60% onwards
+        alpha = fade_in * fade_out
+        label.set_alpha(int(255 * alpha))
+        # Float up 20 pixels over lifetime with slight bounce
+        # Add a little bounce using sine wave
+        drift = 20 * ease_out(progress)
+        bounce = math.sin(progress * math.pi * 2.5) * 2.0  # small bouncy motion
+        screen.blit(label, label.get_rect(
+            center=(self.x + bounce, self.y - drift)))
 
 
 class TimePop:
@@ -2632,9 +2692,6 @@ class Game:
         self.on_title = True
         self.title_ready = False
         self.extras_open = False
-        self.dev_open = False
-        self.dev_clicks = 0
-        self.dev_note = ""
         self.extras = {k: False for k, _, _ in EXTRA_DEFS}
         self.extra_clock = ENDLESS
         self.extras_note = ""
@@ -2672,7 +2729,12 @@ class Game:
         self.font_small = load_font(2)
         self.build_widgets()
         self.build_title_widgets()
-        self.build_dev_widgets()
+        self.timed_duration_picker_open = False
+        self.timed_duration_choice = 90.0  # default 1:30
+        self.bg_index_override = None  # track current background override
+        self.bg_index = 0  # cached random background index
+        self.bg_picker_open = False
+        self.note_time = 0.0  # timer for note fade in/out
         self.reset()
 
     def build_title(self):
@@ -2730,147 +2792,6 @@ class Game:
                    self.play_extras, accent=(126, 216, 150)),
         ]
 
-    @staticmethod
-    def dev_rect():
-        return pygame.Rect(WIDTH // 2 - 260, 70, 520, 590)
-
-    def logo_rect(self):
-        """Where the title art sits, for the secret dev-mode taps."""
-        if self.title_art is None:
-            return pygame.Rect(WIDTH // 2 - 200, 60, 400, 180)
-        return self.title_art.get_rect(center=(WIDTH // 2, 148))
-
-    def build_dev_widgets(self):
-        """Developer mode: fire each effect and cue on demand."""
-        box = self.dev_rect()
-        pad, gap = 24, 8
-        w = (box.width - pad * 2 - gap) // 2
-        specs = [
-            ("MATCH", lambda: self.dev_effect("match")),
-            ("EXPLODE", lambda: self.dev_effect("explode")),
-            ("SMOKE", lambda: self.dev_smoke()),
-            ("HYPER FX", lambda: self.dev_effect("hyper")),
-            ("GO!", lambda: self.dev_go()),
-            ("LEVEL UP", lambda: self.dev_levelup()),
-            ("RAINBOW BLAST", lambda: self.dev_rainbow()),
-            ("BOMB BLAST", lambda: self.dev_bomb()),
-            ("SHAKE", lambda: self.add_shake(SHAKE_MAX)),
-            ("SPAWN FLAME", lambda: self.dev_place(FLAME)),
-            ("SPAWN RAINBOW", lambda: self.dev_place(HYPER)),
-            ("SPAWN BOMB", lambda: self.dev_place(None, CELL_BOMB)),
-            ("SPAWN ROCK", lambda: self.dev_place(None, CELL_ROCK)),
-            ("CLOSE", self.close_dev),
-        ]
-        self.dev_buttons = []
-        for i, (label, action) in enumerate(specs):
-            x = box.x + pad + (i % 2) * (w + gap)
-            y = box.y + 96 + (i // 2) * 46
-            self.dev_buttons.append(Button((x, y, w, 40), label, action))
-
-        sounds = ["match3", "twomatch", "cascade2", "cascade3", "explode",
-                  "hyper", "flamemade", "hypermade", "rainbowcharge",
-                  "rainbowzap", "flyoff", "go", "levelup", "gameover",
-                  "menuclick", "select", "nomatch", "falling", "bonus",
-                  "shuffle"]
-        self.dev_sounds = ScrollList((box.x + pad, box.y + 96 + 7 * 46 + 10,
-                                      box.width - pad * 2, 150))
-        self.dev_sounds.items = sounds
-
-    def open_dev(self):
-        self.dev_open = True
-        self.dev_note = "DEVELOPER MODE"
-        self.audio.play("menuclick")
-
-    def close_dev(self):
-        self.dev_open = False
-        self.dev_clicks = 0
-
-    # -- developer actions -------------------------------------------------
-
-    def dev_cell(self):
-        return ROWS // 2, COLS // 2
-
-    def dev_ensure_board(self):
-        if not self.grid or self.grid[0][0] is None:
-            self.grid = new_grid()
-
-    def dev_effect(self, name):
-        r, c = self.dev_cell()
-        self.spawn_effect(name, r, c)
-        self.dev_note = f"{name} x1"
-
-    def dev_smoke(self):
-        r, c = self.dev_cell()
-        self.spawn_smoke(r, c)
-        self.dev_note = f"smoke ({len(self.puffs)} puffs)"
-
-    def dev_go(self):
-        self.go_left = GO_TIME
-        self.audio.play("go")
-        self.dev_note = "GO!"
-
-    def dev_levelup(self):
-        self.close_dev()
-        self.begin_levelup()
-
-    def dev_rainbow(self):
-        r, c = self.dev_cell()
-        self.grid[r][c] = Gem(HYPER_KIND, HYPER)
-        targets = {(rr, cc) for rr in range(ROWS) for cc in range(COLS)
-                   if self.grid[rr][cc] is not None
-                   and self.grid[rr][cc].cell_type == CELL_GEM
-                   and abs(rr - r) + abs(cc - c) <= 4}
-        self.close_dev()
-        self.begin_rainbow((r, c), targets)
-
-    def dev_bomb(self):
-        r, c = self.dev_cell()
-        self.grid[r][c] = Gem.bomb(1)
-        self.move_pending = True
-        self.close_dev()
-        self.settle()
-
-    def dev_place(self, power, cell_type=None):
-        r, c = self.dev_cell()
-        if cell_type == CELL_BOMB:
-            self.grid[r][c] = Gem.bomb(random.randint(BOMB_FUSE_MIN, BOMB_FUSE_MAX))
-            self.dev_note = "bomb placed at centre"
-        elif cell_type == CELL_ROCK:
-            self.grid[r][c] = Gem.rock()
-            self.dev_note = "rock placed at centre"
-        elif power == HYPER:
-            self.grid[r][c] = Gem(HYPER_KIND, HYPER)
-            self.dev_note = "rainbow placed at centre"
-        else:
-            self.grid[r][c] = Gem(self.grid[r][c].kind if
-                                  self.grid[r][c].cell_type == CELL_GEM else 0,
-                                  FLAME)
-            self.dev_note = "flame placed at centre"
-
-    def draw_dev(self, screen):
-        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        veil.fill((6, 8, 18, 205))
-        screen.blit(veil, (0, 0))
-        box = self.dev_rect()
-        screen.blit(translucent(box.size, PANEL_FILL, PANEL_EDGE, 16),
-                    box.topleft)
-        title = self.font_big.render("DEV MODE", True, GOLD)
-        screen.blit(title, (box.x + 24, box.y + 22))
-        if self.dev_note:
-            note = self.font_small.render(self.dev_note, True, DIM)
-            screen.blit(note, (box.right - 24 - note.get_width(), box.y + 28))
-        hint = self.font_small.render("EFFECTS", True, DIM)
-        screen.blit(hint, (box.x + 24, box.y + 74))
-        for button in self.dev_buttons:
-            button.draw(screen, self.font)
-        label = self.font_small.render("SOUNDS - CLICK TO PLAY", True, DIM)
-        screen.blit(label, (box.x + 24, self.dev_sounds.rect.y - 18))
-        self.dev_sounds.draw(screen, self.font_small)
-
-    @staticmethod
-    def wipe_rect():
-        return pygame.Rect(WIDTH // 2 - 210, HEIGHT // 2 - 110, 420, 220)
-
     def ask_wipe(self):
         self.wipe_open = True
         self.wipe_held = 0.0
@@ -2899,6 +2820,10 @@ class Game:
         # next launch starts genuinely clean, and every input is ignored.
         self.data_wiped = True
         self.audio.play("gameover")
+
+    @staticmethod
+    def wipe_rect():
+        return pygame.Rect(WIDTH // 2 - 210, HEIGHT // 2 - 110, 420, 220)
 
     def update_wipe(self, dt, held):
         """YES has to be held down for WIPE_HOLD seconds."""
@@ -2983,6 +2908,18 @@ class Game:
             screen.blit(img, (box.centerx - img.get_width() // 2, y))
             y += img.get_height() + 12
         for button in self.resume_buttons:
+            button.draw(screen, self.font)
+
+    def draw_duration_picker(self, screen):
+        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        veil.fill((6, 8, 18, 200))
+        screen.blit(veil, (0, 0))
+        box = self.duration_picker_rect()
+        screen.blit(translucent(box.size, PANEL_FILL, PANEL_EDGE, 16),
+                    box.topleft)
+        title = self.font_big.render("SELECT DURATION", True, TEXT)
+        screen.blit(title, (box.centerx - title.get_width() // 2, box.y + 20))
+        for button in self.duration_buttons:
             button.draw(screen, self.font)
 
     @staticmethod
@@ -3118,6 +3055,7 @@ class Game:
         self.settings[key] = not self.settings.get(key, True)
         if key == "shake":
             self.shake = 0.0
+            self.shake_target = 0.0
         self.audio.play("menuclick")
         self.save_settings()
 
@@ -3131,9 +3069,6 @@ class Game:
 
     def close_extras(self):
         self.extras_open = False
-        self.dev_open = False
-        self.dev_clicks = 0
-        self.dev_note = ""
         self.audio.play("menuclick")
 
     def toggle_extra(self, key):
@@ -3153,13 +3088,25 @@ class Game:
             self.extras_note = "PICK AT LEAST ONE"
             return
         self.extras_open = False
-        self.dev_open = False
-        self.dev_clicks = 0
-        self.dev_note = ""
         self.start_game(EXTRAS)
 
     def start_game(self, mode):
         """Leave the title screen and begin a run in the chosen mode."""
+        # For timed mode, show duration picker first
+        if mode == TIMED:
+            if self.timed_duration_picker_open:
+                # Already picking, don't re-trigger
+                return
+            self.timed_duration_picker_open = True
+            self.resume_mode = TIMED  # Track which mode we're picking for
+            return
+        # For Extras mode with Timed clock, also show duration picker
+        if mode == EXTRAS and self.extra_clock == TIMED:
+            if self.timed_duration_picker_open:
+                return
+            self.timed_duration_picker_open = True
+            self.resume_mode = EXTRAS  # Track that we're picking for Extras
+            return
         self.on_title = False
         self.title_ready = False
         self.audio.play("menuclick")
@@ -3222,6 +3169,8 @@ class Game:
         if self.data_wiped:
             self.draw_wiped(screen)
             return
+        if self.timed_duration_picker_open:
+            self.draw_duration_picker(screen)
         if self.resume_open:
             self.draw_resume(screen)
         if self.wipe_open:
@@ -3233,8 +3182,6 @@ class Game:
         if self.wipe_open:
             self.draw_wipe(screen)
 
-        if self.dev_open:
-            self.draw_dev(screen)
 
         credit = self.font_small.render(self.credit_label(), True,
                                         GOLD if self.credit_armed else DIM)
@@ -3316,16 +3263,29 @@ class Game:
         self.rainbow_done = 0
         self.rainbow_step = RAINBOW_STEP
         self.shake = 0.0
+        self.shake_target = 0.0  # smooth ramp towards target
         self.shake_t = 0.0
         self.frame = None
         self.note = ""
+        self.note_time = 0.0
         self.shape_cells = None
         self.shape_name = None
-        self.time_left = TIMED_SECONDS
+        # Use the selected duration for timed mode, otherwise use default
+        if self.timed:
+            self.time_left = self.timed_duration_choice
+        else:
+            self.time_left = TIMED_SECONDS
         self.lock_kind = random.randrange(N_TYPES)
         self.lock_left = LOCK_SECONDS
         self.over = False
+        self.bg_index_override = None  # reset background to random each game
+        # Cache the random background selection so it doesn't change every frame
+        if self.backgrounds:
+            self.bg_index = random.randrange(len(self.backgrounds))
+        else:
+            self.bg_index = 0
         self.time_pops = []          # floating "+3s" labels
+        self.score_pops = []         # floating score labels
         self.puffs = []              # smoke left by flame gems
         # While the title screen is up its own track keeps playing; the mode
         # playlist only takes over once a game actually starts.
@@ -3466,27 +3426,67 @@ class Game:
     def background_for_level(self):
         if not self.backgrounds:
             return None
-        return self.backgrounds[(self.level - 1) % len(self.backgrounds)]
+        # If user cycled with button, use that; otherwise use cached random selection
+        if self.bg_index_override is not None:
+            return self.backgrounds[self.bg_index_override]
+        return self.backgrounds[self.bg_index]
 
     # -- effects ----------------------------------------------------------
+
+    def set_note(self, text):
+        """Set a note with automatic fade in/out timing."""
+        self.note = text
+        self.note_time = 0.0
+
+    def draw_note(self, screen, x, y, width):
+        """Draw note with fade in/out and rainbow color for BOARD WIPE and RAINBOW."""
+        if not self.note:
+            return
+        # Fade in first 0.3s, out after 2.0s, total 2.5s
+        fade_in = min(1.0, self.note_time / 0.3)
+        fade_out = max(0.0, 1.0 - (self.note_time - 2.0) / 0.5) if self.note_time > 2.0 else 1.0
+        alpha = fade_in * fade_out
+        
+        # Use rainbow color for "BOARD WIPE!" and "RAINBOW!", normal gold for others
+        if "BOARD WIPE" in self.note or "RAINBOW" in self.note:
+            hue = (self.note_time * 0.8) % 1.0
+            rgb = colorsys.hsv_to_rgb(hue, 0.9, 1.0)
+            color = tuple(int(c * 255) for c in rgb)
+        else:
+            color = GOLD
+        
+        # Render text
+        label = self.font.render(self.note, True, color)
+        label = label.copy()
+        label.set_alpha(int(255 * alpha))
+        
+        # Center text
+        text_rect = label.get_rect(center=(x + width // 2, y))
+        screen.blit(label, text_rect)
 
     def add_shake(self, amount):
         if not self.settings.get("shake", True):
             return
         """Kick the camera. Amounts add up but are capped, so a huge cascade
-        does not turn into an earthquake."""
-        self.shake = min(SHAKE_MAX, self.shake + amount)
+        does not turn into an earthquake. Smoothly ramps in/out for natural feel."""
+        self.shake_target = min(SHAKE_MAX, self.shake_target + amount)
 
     def shake_offset(self):
-        """Decaying wobble on two different frequencies, so it does not read
-        as a clean sine wave."""
+        """INSANE explosive camera shake - rapid violent jitter."""
         if self.shake <= 0.15:
             return (0, 0)
         a = self.shake
-        return (int(math.sin(self.shake_t * 46.0) * a
-                    + math.sin(self.shake_t * 71.0) * a * 0.4),
-                int(math.cos(self.shake_t * 53.0) * a * 0.8
-                    + math.cos(self.shake_t * 89.0) * a * 0.3))
+        # EXTREME frequencies create frantic, violent jittering
+        # Much faster and more intense - increased amplitudes
+        x = (math.sin(self.shake_t * 45.0) * a * 0.85
+             + math.sin(self.shake_t * 67.3) * a * 0.65
+             + math.cos(self.shake_t * 82.1) * a * 0.55
+             + math.sin(self.shake_t * 31.7) * a * 0.4)
+        y = (math.cos(self.shake_t * 52.4) * a * 0.85
+             + math.cos(self.shake_t * 71.8) * a * 0.65
+             + math.sin(self.shake_t * 93.2) * a * 0.55
+             + math.cos(self.shake_t * 38.6) * a * 0.4)
+        return (int(x), int(y))
 
     def spawn_effect(self, name, r, c):
         """Play an animation centred on a board cell, if that effect exists."""
@@ -3497,7 +3497,7 @@ class Game:
                                    BOARD_X + int((c + 0.5) * TILE),
                                    BOARD_Y + int((r + 0.5) * TILE)))
 
-    def puff_cells(self, cells, per_cell=2, force=0.5):
+    def puff_cells(self, cells, per_cell=3, force=0.5):
         """A small amount of smoke spread over many cells.
 
         Used for a hypercube wipe: a full burst on every gem would be dozens
@@ -3516,7 +3516,7 @@ class Game:
                                        angle=random.uniform(0, math.tau),
                                        force=force))
 
-    def spawn_smoke(self, r, c, count=7):
+    def spawn_smoke(self, r, c, count=14):
         """A cloud where a flame gem went off.
 
         Puffs are thrown out on an even spread of angles with a random wobble,
@@ -3533,9 +3533,10 @@ class Game:
                                    angle=angle,
                                    force=random.uniform(0.65, 1.15)))
         # one slow fat puff in the middle, so the centre is not hollow
+        # increased force for bigger central puff
         self.puffs.append(Puff(max(self.smoke, key=lambda s: s.get_width()),
                                x, y, angle=random.uniform(0, math.tau),
-                               force=0.28))
+                               force=0.42))
 
     def spawn_effect_at(self, name, x, y):
         anim = self.anims.get(name)
@@ -3663,6 +3664,8 @@ class Game:
         w = PANEL_W - 32
         bottom = PANEL_Y + PANEL_H - 16
         self.buttons = [
+            Button((x, bottom - 46 * 4 - 30, w, 46), "BACKGROUNDS",
+                   self.open_background_picker, accent=(176, 140, 240)),
             Button((x, bottom - 46 * 3 - 20, w, 46), "HINT",
                    self.show_hint, accent=HINT_COLOR),
             Button((x, bottom - 46 * 2 - 10, w, 46), "MUSIC",
@@ -3718,6 +3721,49 @@ class Game:
                    self.do_fresh, accent=(232, 92, 92)),
         ]
 
+        # Duration picker for timed mode
+        dbox = self.duration_picker_rect()
+        # 2x2 grid of buttons, centered
+        btn_w = 90
+        btn_h = 50
+        gap = 20
+        total_w = btn_w * 2 + gap
+        start_x = dbox.centerx - total_w // 2
+        self.duration_buttons = [
+    Button(
+        (start_x, dbox.y + 80, btn_w, btn_h),
+        "1:00",
+        lambda: self.pick_duration(60.0),
+        accent=(232, 150, 96),
+        art=self.skinned("menubutton", (btn_w, btn_h)),
+        art_hover=self.skinned("menubuttonhovered", (btn_w, btn_h)),
+    ),
+    Button(
+        (start_x + btn_w + gap, dbox.y + 80, btn_w, btn_h),
+        "1:30",
+        lambda: self.pick_duration(90.0),
+        accent=(232, 150, 96),
+        art=self.skinned("menubutton", (btn_w, btn_h)),
+        art_hover=self.skinned("menubuttonhovered", (btn_w, btn_h)),
+    ),
+    Button(
+        (start_x, dbox.y + 80 + btn_h + gap, btn_w, btn_h),
+        "2:00",
+        lambda: self.pick_duration(120.0),
+        accent=(232, 150, 96),
+        art=self.skinned("menubutton", (btn_w, btn_h)),
+        art_hover=self.skinned("menubuttonhovered", (btn_w, btn_h)),
+    ),
+    Button(
+        (start_x + btn_w + gap, dbox.y + 80 + btn_h + gap, btn_w, btn_h),
+        "2:30",
+        lambda: self.pick_duration(150.0),
+        accent=(232, 150, 96),
+        art=self.skinned("menubutton", (btn_w, btn_h)),
+        art_hover=self.skinned("menubuttonhovered", (btn_w, btn_h)),
+    ),
+]
+
         self.credit_buttons = [
             Button((WIDTH - 190, HEIGHT - 78, 160, 48), "BACK",
                    self.close_credits),
@@ -3734,6 +3780,18 @@ class Game:
                    art_hover=self.skinned("menubuttonhovered", (pw, 44))),
         ]
 
+        # Background picker list
+        bgpicker = self.music_rect()  # reuse same rect
+        self.bg_list = ScrollList((bgpicker.x + 24, bgpicker.y + 76,
+                                   bgpicker.width - 48, bgpicker.height - 150))
+        bgw = bgpicker.width - 48
+        self.bg_picker_buttons = [
+            Button((bgpicker.x + 24, bgpicker.bottom - 62, bgw, 44), "CLOSE",
+                   self.close_background_picker,
+                   art=self.skinned("menubutton", (bgw, 44)),
+                   art_hover=self.skinned("menubuttonhovered", (bgw, 44))),
+        ]
+
         over = self.over_rect()
         ox, ow = over.x + 34, over.width - 68
         third = (ow - 20) // 2
@@ -3747,6 +3805,10 @@ class Game:
     @staticmethod
     def music_rect():
         return pygame.Rect(WIDTH // 2 - 230, HEIGHT // 2 - 220, 460, 440)
+
+    @staticmethod
+    def duration_picker_rect():
+        return pygame.Rect(WIDTH // 2 - 230, HEIGHT // 2 - 170, 460, 280)
 
     @staticmethod
     def over_rect():
@@ -3781,6 +3843,39 @@ class Game:
 
     def close_music(self):
         self.music_open = False
+
+    def pick_duration(self, seconds):
+        """Select timed mode duration and start the game."""
+        self.timed_duration_choice = seconds
+        self.timed_duration_picker_open = False
+        self.on_title = False
+        self.title_ready = False
+        self.audio.play("menuclick")
+        # Use resume_mode to know whether starting TIMED or EXTRAS with TIMED clock
+        mode = self.resume_mode if self.resume_mode else TIMED
+        self.reset(mode)
+
+    def close_duration_picker(self):
+        """Dismiss the duration picker without starting."""
+        self.timed_duration_picker_open = False
+        self.audio.play("menuclick")
+
+    def open_background_picker(self):
+        """Open the background picker dialog."""
+        self.bg_picker_open = True
+        self.menu_open = False
+        self.sel = None
+        self.dragging = None
+        # Generate list of background names
+        if self.backgrounds:
+            self.bg_list.items = [f"BG {i+1}" for i in range(len(self.backgrounds))]
+            self.bg_list.current = self.bg_index_override if self.bg_index_override is not None else 0
+            self.bg_list.offset = 0.0
+        self.audio.play("menuclick")
+
+    def close_background_picker(self):
+        self.bg_picker_open = False
+        self.audio.play("menuclick")
 
     # -- saving ------------------------------------------------------------
 
@@ -3833,7 +3928,12 @@ class Game:
         board no longer fits the current board size or gem set."""
         entry = read_saves().get(mode) or {}
         grid = unpack_grid(entry.get("grid"))
-        self.start_game(mode)
+        # For resume, skip the duration picker and go straight to the game
+        # using the saved time_left instead
+        self.on_title = False
+        self.title_ready = False
+        self.audio.play("menuclick")
+        self.reset(mode)
         if grid is None:
             return False
         self.score = int(entry.get("score", 0))
@@ -3926,7 +4026,7 @@ class Game:
                     return
             return
         if self.on_title and not self.extras_open and not self.menu_open \
-                and not self.dev_open and self.credit_rect().collidepoint(pos):
+                and self.credit_rect().collidepoint(pos):
             if self.credit_armed:
                 self.open_credits()
             else:
@@ -3967,6 +4067,11 @@ class Game:
                 if button.hit(pos):
                     return button
             return None
+        if self.bg_picker_open:
+            for button in self.bg_picker_buttons:
+                if button.hit(pos):
+                    return button
+            return None
         if self.over:
             for button in self.over_buttons:
                 if button.hit(pos):
@@ -3988,28 +4093,15 @@ class Game:
     def on_down(self, pos):
         if self.data_wiped:
             return                       # nothing is clickable any more
-        if self.on_title and self.dev_open:
-            row = self.dev_sounds.index_at(pos)
-            if row >= 0:
-                self.audio.play(self.dev_sounds.items[row])
-                self.dev_sounds.current = row
-                self.dev_note = f"played {self.dev_sounds.items[row]}"
-                return
-            for button in self.dev_buttons:
+        if self.on_title and self.timed_duration_picker_open:
+            for button in self.duration_buttons:
                 if button.hit(pos):
                     button.down = True
                     return
-            if not self.dev_rect().collidepoint(pos):
-                self.close_dev()
+            # Click outside the picker dismisses it
+            if not self.duration_picker_rect().collidepoint(pos):
+                self.close_duration_picker()
             return
-
-        if self.on_title and self.logo_rect().collidepoint(pos):
-            self.dev_clicks += 1
-            if self.dev_clicks >= DEV_CLICKS:
-                self.dev_clicks = 0
-                self.open_dev()
-                return
-
         if self.on_title and self.extras_open:
             for key, rect, _, _ in self.extra_rows:
                 if rect.collidepoint(pos):
@@ -4069,6 +4161,16 @@ class Game:
                 self.audio.play("menuclick")
                 self.close_music()
             return
+        if self.bg_picker_open:
+            row = self.bg_list.index_at(pos)
+            if row >= 0:
+                self.audio.play("menuclick")
+                self.bg_index_override = row
+                self.bg_list.current = row
+            elif not self.music_rect().collidepoint(pos):
+                self.audio.play("menuclick")
+                self.close_background_picker()
+            return
         if self.over:
             return                     # nothing but those two buttons is live
         if self.wipe_open:
@@ -4089,7 +4191,7 @@ class Game:
                 self.close_menu()      # click outside the box dismisses it
             return
 
-        if self.state != "idle":
+        if self.state not in ("idle", "clear", "fall"):
             return
         cell = self.cell_at(pos)
         self.press = cell
@@ -4111,10 +4213,29 @@ class Game:
         if self.dragging is not None:
             self.dragging.set_from(pos)
             return
+        # Handle hover for music and background picker lists
+        if self.music_open:
+            self.music_list.hover = self.music_list.index_at(pos)
+            return
+        if self.bg_picker_open:
+            self.bg_list.hover = self.bg_list.index_at(pos)
+            return
+        # Don't allow button hover when duration picker is open
+        if self.timed_duration_picker_open:
+            return
         if self.on_title:
-            active = ([] if self.menu_open
-                      else self.extra_buttons if self.extras_open
-                      else (self.title_buttons if self.title_ready else []))
+            if self.menu_open:
+                active = []
+            elif self.credits_open:
+                active = self.credit_buttons
+            elif self.resume_open:
+                active = self.resume_buttons
+            elif self.wipe_open:
+                active = self.wipe_buttons
+            elif self.extras_open:
+                active = self.extra_buttons
+            else:
+                active = (self.title_buttons if self.title_ready else [])
         elif self.over:
             active = self.over_buttons
         elif self.menu_open:
@@ -4123,7 +4244,10 @@ class Game:
             active = self.buttons
         for button in (self.buttons + self.menu_buttons + self.over_buttons
                        + self.title_buttons + self.setting_buttons
-                       + self.extra_buttons):
+                       + self.extra_buttons + self.duration_buttons
+                       + self.credit_buttons + self.music_buttons
+                       + self.bg_picker_buttons + self.resume_buttons
+                       + self.wipe_buttons):
             button.hover = button in active and button.hit(pos)
 
     def on_up(self, pos):
@@ -4136,9 +4260,10 @@ class Game:
         fired = None
         for button in (self.buttons + self.menu_buttons + self.over_buttons
                        + self.title_buttons + self.music_buttons
-                       + self.extra_buttons + self.dev_buttons
+                       + self.extra_buttons
                        + self.setting_buttons + self.credit_buttons
-                       + self.resume_buttons + self.wipe_buttons):
+                       + self.resume_buttons + self.wipe_buttons + self.duration_buttons
+                       + self.bg_picker_buttons):
             if button.down and button.hit(pos):
                 fired = button
             button.down = False
@@ -4188,12 +4313,24 @@ class Game:
             self.effects = [e for e in self.effects if e.update(dt)]
         if self.go_left > 0:
             self.go_left = max(0.0, self.go_left - dt)
-        if self.shake > 0:
+        if self.shake > 0 or self.shake_target > 0:
             self.shake_t += dt
-            self.shake = max(0.0, self.shake - self.shake * SHAKE_DECAY * dt
-                             - 0.6 * dt)
+            # Smoothly ramp towards target over SHAKE_RAMP seconds
+            if self.shake < self.shake_target:
+                self.shake = min(self.shake_target, self.shake + (self.shake_target / SHAKE_RAMP) * dt)
+            else:
+                self.shake = max(self.shake_target, self.shake - (self.shake_target / SHAKE_RAMP) * dt)
+            # Decay the target smoothly
+            self.shake_target = max(0.0, self.shake_target - self.shake_target * SHAKE_DECAY * dt)
+        # Update note timer for fade in/out
+        if self.note:
+            self.note_time += dt
+            if self.note_time > 2.5:  # Clear note after 2.5 seconds
+                self.note = ""
         if self.time_pops:
             self.time_pops = [p for p in self.time_pops if p.update(dt)]
+        if self.score_pops:
+            self.score_pops = [p for p in self.score_pops if p.update(dt)]
         if self.puffs:
             self.puffs = [p for p in self.puffs if p.update(dt)]
 
@@ -4201,7 +4338,6 @@ class Game:
         # the menu pauses it - otherwise adjusting the volume costs you time.
         if (self.timed and not self.over
                 and not self.menu_open and not self.music_open
-                and not getattr(self, "dev_open", False)
                 and self.state not in PAUSED_STATES):
             self.time_left -= dt
             if self.time_left <= 0:
@@ -4329,7 +4465,14 @@ class Game:
             r, c = self.rainbow_targets[self.rainbow_done]
             self.rainbow_done += 1
             self.rainbow_bolts.append((self.rainbow_origin, (r, c), 0.16))
-            self.spawn_effect("match", r, c)
+            # Check if this gem is a flame gem and spawn explosion effect
+            gem = self.grid[r][c]
+            if gem is not None and gem.power == FLAME:
+                self.spawn_effect("explode", r, c)
+                self.spawn_smoke(r, c)
+                self.audio.play("explode")
+            else:
+                self.spawn_effect("match", r, c)
             if self.rainbow_done % ZAP_EVERY == 0:
                 self.audio.play("rainbowzap")
                 self.add_shake(SHAKE_RAINBOW * 0.16)
@@ -4348,7 +4491,7 @@ class Game:
             self.rainbow_targets = []
             self.cascade = 1
             self.multi_run = False
-            self.begin_clear(targets, {})
+            self.begin_clear(targets, {}, is_rainbow=True)
 
     def draw_rainbow(self, screen):
         """Lightning from the rainbow gem to everything it is destroying."""
@@ -4391,13 +4534,28 @@ class Game:
         if ga.power == HYPER or gb.power == HYPER:
             hyper, other = (a, b) if ga.power == HYPER else (b, a)
             both = ga.power == HYPER and gb.power == HYPER
+            
+            # Check if swapping with rock or bomb
+            other_gem = self.grid[other[0]][other[1]]
+            if other_gem.cell_type == CELL_ROCK or other_gem.cell_type == CELL_BOMB:
+                # Apply swap FIRST so the bomb/rock is now at hyper position
+                self.apply_swap()
+                # Now get targets with the swapped positions (bomb/rock is now at hyper)
+                targets = rock_bomb_targets(self.grid, other, hyper)
+                origin = hyper  # Origin is now where the bomb/rock ended up after swap
+                cell_type_name = "ROCKS" if other_gem.cell_type == CELL_ROCK else "BOMBS"
+                self.set_note(f"ALL {cell_type_name}!")
+                self.spawn_effect("hyper", *origin)
+                self.begin_rainbow(origin, targets)
+                return
+            
             targets = hyper_targets(self.grid, hyper, other)
             # Actually complete the swap so the rainbow gem ends up in the
             # square it was dragged into, rather than snapping back and
             # detonating from where it started.
             self.apply_swap()
             origin = other
-            self.note = "BOARD WIPE!" if both else "RAINBOW!"
+            self.set_note("BOARD WIPE!" if both else "RAINBOW!")
             self.spawn_effect("hyper", *origin)
             self.begin_rainbow(origin, targets)
             return
@@ -4436,7 +4594,7 @@ class Game:
                                  self.time_left + BONUS_SECONDS * gained)
             self.audio.play("bonus")
 
-    def begin_clear(self, cells, spawns):
+    def begin_clear(self, cells, spawns, is_rainbow=False):
         self.matched = cells
         self.spawns = spawns
         self.award_time(cells)
@@ -4451,14 +4609,39 @@ class Game:
             gained = 0
         elif self.extra("lock"):
             # only the locked colour pays out
-            gained = sum(POINTS_PER_GEM * self.cascade for r, c in cells
-                         if self.grid[r][c] is not None
-                         and self.grid[r][c].kind == self.lock_kind)
+            gained = 0
+            matched_locked = []
+            for r, c in cells:
+                if self.grid[r][c] is not None and self.grid[r][c].kind == self.lock_kind:
+                    pts = POINTS_PER_GEM * self.cascade
+                    gained += pts
+                    matched_locked.append((r, c))
+            # Show one accumulated score pop at center of matched cells
+            if matched_locked:
+                avg_r = sum(rc[0] for rc in matched_locked) / len(matched_locked)
+                avg_c = sum(rc[1] for rc in matched_locked) / len(matched_locked)
+                x = BOARD_X + int((avg_c + 0.5) * TILE)
+                y = BOARD_Y + int((avg_r + 0.5) * TILE)
+                self.score_pops.append(ScorePop(x, y, gained, is_rainbow=is_rainbow))
         else:
             gained = len(cells) * POINTS_PER_GEM * self.cascade
+            # Show one accumulated score pop at center of matched cells
+            avg_r = sum(rc[0] for rc in cells) / len(cells)
+            avg_c = sum(rc[1] for rc in cells) / len(cells)
+            x = BOARD_X + int((avg_c + 0.5) * TILE)
+            y = BOARD_Y + int((avg_r + 0.5) * TILE)
+            # Use rainbow color if this is a rainbow gem detonation
+            self.score_pops.append(ScorePop(x, y, gained, is_rainbow=is_rainbow))
+        
+        # Bonus gems: show individual popups for each one
         if self.scoring:
-            for power in spawns.values():
-                gained += HYPER_BONUS if power == HYPER else FLAME_BONUS
+            for (r, c), power in spawns.items():
+                bonus = HYPER_BONUS if power == HYPER else FLAME_BONUS
+                gained += bonus
+                # Show bonus score pop at power gem location
+                x = BOARD_X + int((c + 0.5) * TILE)
+                y = BOARD_Y + int((r + 0.5) * TILE)
+                self.score_pops.append(ScorePop(x, y, bonus))
         self.score += gained
 
         self.audio.play_match(self.cascade, self.multi_run)
@@ -4469,11 +4652,11 @@ class Game:
             self.add_shake(SHAKE_FLAME)
             self.audio.play("explode")
         if HYPER in spawns.values():
-            self.note = "HYPERCUBE!"
+            self.set_note("HYPERCUBE!")
         elif FLAME in spawns.values():
-            self.note = "FLAME GEM!"
+            self.set_note("FLAME GEM!")
         elif self.cascade > 1:
-            self.note = f"CASCADE x{self.cascade}"
+            self.set_note(f"CASCADE x{self.cascade}")
         self.state = "clear"
 
     def finish_clear(self):
@@ -4529,7 +4712,7 @@ class Game:
         if blast:
             self.cascade = 1
             self.multi_run = False
-            self.note = "BOOM!"
+            self.set_note("BOOM!")
             self.add_shake(SHAKE_BOMB)
             self.audio.play("explode")
             for r, c in self.spent_bombs:
@@ -4782,13 +4965,12 @@ class Game:
             screen.blit(zen, (x, PANEL_Y + 40))
             for button in self.buttons:
                 button.draw(screen, self.font)
-            if self.note:
-                self.wrapped(screen, self.note, x, PANEL_Y + 208, width, GOLD)
+            self.draw_note(screen, x, PANEL_Y + 208, width)
             track = self.audio.now_playing()
             if track:
                 screen.blit(self.font_small.render("NOW PLAYING", True, DIM),
-                            (x, PANEL_Y + PANEL_H - 250))
-                self.wrapped(screen, track, x, PANEL_Y + PANEL_H - 232,
+                            (x, PANEL_Y + PANEL_H - 296))
+                self.wrapped(screen, track, x, PANEL_Y + PANEL_H - 274,
                              width, DIM)
             return
 
@@ -4837,14 +5019,13 @@ class Game:
         screen.blit(mode, (PANEL_X + PANEL_W - 16 - mode.get_width(),
                            PANEL_Y + 28))
 
-        if self.note:
-            self.wrapped(screen, self.note, x, PANEL_Y + 214, width, GOLD)
+        self.draw_note(screen, x, PANEL_Y + 214, width)
 
         track = self.audio.now_playing()
         if track:
             screen.blit(self.font_small.render("NOW PLAYING", True, DIM),
-                        (x, PANEL_Y + PANEL_H - 252))
-            self.wrapped(screen, track, x, PANEL_Y + PANEL_H - 230, width, DIM)
+                        (x, PANEL_Y + PANEL_H - 296))
+            self.wrapped(screen, track, x, PANEL_Y + PANEL_H - 274, width, DIM)
 
         for button in self.buttons:
             button.draw(screen, self.font)
@@ -4865,16 +5046,16 @@ class Game:
             screen.blit(self.font_small.render(line, True, color), (x, y))
 
     def draw_holes(self, screen, opaque=False):
-        """Black out the cells that are not part of a Shapes silhouette.
+        """Darken the cells that are not part of a Shapes silhouette.
 
         Drawn twice: once under the gems so the board reads as a shape, and
         again over them, because a gem falling into a lower row passes
-        visually through any hole above it.
+        visually through any hole above it. Always darkened tiles, never opaque.
         """
         if self.mode != SHAPES:
             return
-        # a darkened block rather than a hole punched through to black
-        shade = (14, 16, 26, 255) if opaque else (10, 12, 20, 168)
+        # Always use darkened tiles - no opaque blocks
+        shade = (14, 16, 26, 200)
         tile = translucent((TILE, TILE), shade, None, 0)
         for r in range(ROWS):
             for c in range(COLS):
@@ -4966,6 +5147,21 @@ class Game:
         screen.blit(hint, (box.right - 24 - hint.get_width(), box.y + 30))
         self.music_list.draw(screen, self.font)
         for button in self.music_buttons:
+            button.draw(screen, self.font)
+
+    def draw_background_picker(self, screen):
+        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        veil.fill((8, 9, 13, 190))
+        screen.blit(veil, (0, 0))
+        box = self.music_rect()
+        screen.blit(translucent(box.size, PANEL_FILL, PANEL_EDGE, 16),
+                    box.topleft)
+        title = self.font_big.render("BACKGROUNDS", True, TEXT)
+        screen.blit(title, (box.x + 24, box.y + 24))
+        hint = self.font_small.render("SCROLL WHEEL", True, DIM)
+        screen.blit(hint, (box.right - 24 - hint.get_width(), box.y + 30))
+        self.bg_list.draw(screen, self.font)
+        for button in self.bg_picker_buttons:
             button.draw(screen, self.font)
 
     def draw_menu(self, screen):
@@ -5095,10 +5291,16 @@ class Game:
             self.draw_title(screen, background=background)
             return
         offset = self.shake_offset()
+        
+        # Draw background directly to screen (no shake applied)
+        photo = self.background_for_level() if background else None
+        if photo is None:
+            screen.fill(BG)
+        else:
+            screen.blit(photo, (0, 0))
+        
+        # Draw board and UI to a temporary surface with shake offset applied
         if offset == (0, 0):
-            # Draw straight to the target. Going via an intermediate surface
-            # and blitting SRCALPHA onto SRCALPHA does not reliably preserve
-            # the alpha channel, which blacked out the whole UI area.
             target = screen
         else:
             if self.frame is None:
@@ -5107,45 +5309,17 @@ class Game:
             target = self.frame
 
         if self.state in ("flyoff", "banner"):
-            self.draw_transition(target, background=background)
+            self.draw_transition(target, background=False)  # No background, we drew it above
         else:
-            self.draw_scene(target, background=background)
+            self.draw_scene(target, background=False)  # No background, we drew it above
 
         if target is not screen:
-            # Blow the frame up just enough that the shake offset can never
-            # slide a bare edge into view.
-            pad = SHAKE_MAX + 2
-            big = pygame.transform.smoothscale(
-                target, (WIDTH + pad * 2, HEIGHT + pad * 2))
-            screen.blit(big, (offset[0] - pad, offset[1] - pad))
+            # Translate (don't scale) the board/UI by the shake offset
+            screen.blit(target, offset)
 
     def draw_transition(self, screen, background=True):
         """Gems flying off, then the LEVEL banner over an empty board."""
-        self.draw_scene(screen, background=background)          # background, panel, empty board
-        if self.state == "rainbow":
-            self.update_rainbow(dt)
-            return
-
-        if self.state == "flyoff":
-            for flyer in self.flyers:
-                flyer.draw(screen)
-            return
-
-        dx, alpha = self.banner_pose()
-        alpha = max(0, min(255, alpha))
-        cx = BOARD_X + BOARD_W // 2 + dx
-        cy = BOARD_Y + BOARD_H // 2
-        image = self.banner
-        if image is None:
-            image = self.font_huge.render("LEVEL UP", True, TEXT)
-        shown = image.copy()
-        shown.set_alpha(alpha)
-        screen.blit(shown, shown.get_rect(center=(cx, cy)))
-
-        label = self.font_score.render(f"LEVEL {self.level}", True, TEXT)
-        label.set_alpha(alpha)
-        screen.blit(label, label.get_rect(
-            center=(cx, cy + image.get_height() // 2 + 26)))
+        self.draw_scene(screen, background=background)
 
     def update_motes(self, dt):
         if not self.settings.get("particles", True):
@@ -5223,6 +5397,8 @@ class Game:
             effect.draw(screen)
         for pop in self.time_pops:
             pop.draw(screen, self.font_big)
+        for pop in self.score_pops:
+            pop.draw(screen, self.font_big)
         screen.set_clip(clip)
         if self.state == "rainbow":
             self.draw_rainbow(screen)
@@ -5233,12 +5409,37 @@ class Game:
 
         if self.state == "levelup":
             self.draw_levelup(screen)
+        
+        # Draw flyoff gems and banner before menus so menus appear on top
+        if self.state == "flyoff":
+            for flyer in self.flyers:
+                flyer.draw(screen)
+        elif self.state == "banner":
+            dx, alpha = self.banner_pose()
+            alpha = max(0, min(255, alpha))
+            cx = BOARD_X + BOARD_W // 2 + dx
+            cy = BOARD_Y + BOARD_H // 2
+            image = self.banner
+            if image is None:
+                image = self.font_huge.render("LEVEL UP", True, TEXT)
+            shown = image.copy()
+            shown.set_alpha(alpha)
+            screen.blit(shown, shown.get_rect(center=(cx, cy)))
+
+            label = self.font_score.render(f"LEVEL {self.level}", True, TEXT)
+            label.set_alpha(alpha)
+            screen.blit(label, label.get_rect(
+                center=(cx, cy + image.get_height() // 2 + 26)))
+        
+        # Draw menus last so they appear on top
         if self.menu_open:
             self.draw_menu(screen)
         if self.wipe_open:
             self.draw_wipe(screen)
         if self.music_open:
             self.draw_music(screen)
+        if self.bg_picker_open:
+            self.draw_background_picker(screen)
         if self.over:
             self.draw_over(screen)
 
@@ -5398,9 +5599,7 @@ def main():
                 sys.exit()
             elif e.type == pygame.KEYDOWN and not game.data_wiped:
                 if e.key == pygame.K_ESCAPE:
-                    if game.dev_open:
-                        game.close_dev()
-                    elif game.music_open:
+                    if game.music_open:
                         game.close_music()
                     elif game.menu_open:
                         game.close_menu()
@@ -5432,10 +5631,11 @@ def main():
                 game.on_up(display.to_game(e.pos))
             elif e.type == pygame.MOUSEMOTION:
                 game.on_motion(display.to_game(e.pos))
-            elif e.type == pygame.MOUSEWHEEL and game.music_open:
-                game.music_list.scroll(-e.y)
-            elif e.type == pygame.MOUSEWHEEL and game.dev_open:
-                game.dev_sounds.scroll(-e.y)
+            elif e.type == pygame.MOUSEWHEEL:
+                if game.music_open:
+                    game.music_list.scroll(-e.y)
+                elif game.bg_picker_open:
+                    game.bg_list.scroll(-e.y)
 
         if game.wants_quit:
             pygame.quit()
