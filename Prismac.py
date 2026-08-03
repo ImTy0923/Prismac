@@ -1213,8 +1213,10 @@ def rock_bomb_targets(g, hyper_cell, other_cell):
     cell_type_to_destroy = other.cell_type  # CELL_ROCK or CELL_BOMB
     targets = {(r, c) for r in range(ROWS) for c in range(COLS)
                if g[r][c] is not None and g[r][c].cell_type == cell_type_to_destroy}
-    # Ensure the swapped cell itself is included
+    # The swapped cell, and the rainbow gem itself - it is consumed here just
+    # as it is when swapped with an ordinary gem.
     targets.add(other_cell)
+    targets.add(hyper_cell)
     return targets
 
 
