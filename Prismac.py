@@ -1866,13 +1866,30 @@ def write_saves(data):
         pass                      # a read-only folder should not crash the game
 
 
+def grid_intact(grid):
+    """True when every cell holds something. During the level transition the
+    board is deliberately emptied, and there is nothing worth saving then."""
+    return all(cell is not None for row in grid for cell in row)
+
+
 def pack_grid(grid):
+    """Grid -> plain lists. A None cell is stored as an empty one so a
+    partially-built board can never raise."""
+    """Grid -> plain lists.
+
+    Cells can legitimately be None during the level transition, when the
+    board has been emptied ready for the new one, so those are stored as
+    holes rather than crashing.
+    """
     """Grid -> plain lists, so every cell type survives a round trip."""
-    return [[[c.cell_type, c.kind, c.power, int(bool(c.bonus)),
-              getattr(c, "fuse", 0)] for c in row] for row in grid]
+    return [[([c.cell_type, c.kind, c.power, int(bool(c.bonus)),
+               getattr(c, "fuse", 0)] if c is not None
+              else [CELL_EMPTY, 0, NORMAL, 0, 0]) for c in row]
+            for row in grid]
 
 
 def unpack_grid(raw):
+    """Rebuild a saved grid, or None to mean "deal a fresh board"."""
     """Rebuild a grid, or None if the data does not fit the current board."""
     if not isinstance(raw, list) or len(raw) != ROWS:
         return None
@@ -3598,6 +3615,8 @@ class Game:
                 # stagger by distance from the centre so it ripples outward
                 dr, dc = r - (ROWS - 1) / 2, c - (COLS - 1) / 2
                 delay = math.hypot(dr, dc) / max(ROWS, COLS) * 0.42
+                if not self.bubbly:
+                    continue          # flat mode fades the board out instead
                 self.flyers.append(FlyingGem(
                     self.sprite_for(gem),
                     BOARD_X + (c + 0.5) * TILE,
@@ -3631,15 +3650,18 @@ class Game:
         side, the same way the GO! card behaves. No scaling.
         """
         t = self.t
+        flat = not self.bubbly          # no sliding: fade in and out on the spot
         if t < BANNER_IN:
             p = ease_out(clamp01(t / BANNER_IN))
-            return int(-WIDTH * (1.0 - p)), int(255 * clamp01(t / (BANNER_IN * 0.6)))
+            alpha = int(255 * clamp01(t / (BANNER_IN * 0.6)))
+            return (0 if flat else int(-WIDTH * (1.0 - p))), alpha
         t -= BANNER_IN
         if t < BANNER_HOLD:
             return 0, 255
         t -= BANNER_HOLD
         p = clamp01(t / BANNER_OUT)
-        return int(WIDTH * ease_in_out(p)), int(255 * (1.0 - clamp01(p * 1.4)))
+        alpha = int(255 * (1.0 - clamp01(p * 1.4)))
+        return (0 if flat else int(WIDTH * ease_in_out(p))), alpha
 
     def secret_shuffle(self):
         """Hidden reshuffle. New board, score and level untouched.
@@ -3888,7 +3910,34 @@ class Game:
     def save_run(self):
         if self.data_wiped or not self.savable() or self.on_title:
             return
+        # The board is emptied to None during the level-up fly-off, so there
+        # is nothing coherent to store until the new one has arrived. Keep
+        # whatever was saved before rather than crashing or writing a blank.
+        if any(cell is None for row in self.grid for cell in row):
+            return
+        if self.state in ("flyoff", "banner", "settling"):
+            # the board is mid-swap between levels and holds nothing useful;
+            # store the progress and let the resume deal a fresh one
+            data = read_saves()
+            data[self.mode] = {
+                "score": self.score, "level": self.level,
+                "level_floor": self.level_floor, "shape": self.shape_name,
+                "time_left": round(self.time_left, 2), "grid": None,
+            }
+            write_saves(data)
+            return
         data = read_saves()
+        if not grid_intact(self.grid):
+            # mid-transition: keep the score and level, drop the board and
+            # let the resume build a fresh one
+            entry = {"score": self.score, "level": self.level,
+                     "level_floor": self.level_floor,
+                     "shape": self.shape_name,
+                     "time_left": round(self.time_left, 2)}
+            if self.score > 0 or self.level > 1:
+                data[self.mode] = entry
+                write_saves(data)
+            return
         if self.score <= 0 and self.level <= 1:
             # nothing achieved yet - clear any stale save rather than store
             # a board the player would be asked about for no reason
@@ -3919,6 +3968,17 @@ class Game:
 
     def clear_save(self, mode):
         data = read_saves()
+        if not grid_intact(self.grid):
+            # mid-transition: keep the score and level, drop the board and
+            # let the resume build a fresh one
+            entry = {"score": self.score, "level": self.level,
+                     "level_floor": self.level_floor,
+                     "shape": self.shape_name,
+                     "time_left": round(self.time_left, 2)}
+            if self.score > 0 or self.level > 1:
+                data[self.mode] = entry
+                write_saves(data)
+            return
         if mode in data:
             del data[mode]
             write_saves(data)
@@ -4338,6 +4398,7 @@ class Game:
         # the menu pauses it - otherwise adjusting the volume costs you time.
         if (self.timed and not self.over
                 and not self.menu_open and not self.music_open
+                and not self.bg_picker_open
                 and self.state not in PAUSED_STATES):
             self.time_left -= dt
             if self.time_left <= 0:
@@ -5019,7 +5080,9 @@ class Game:
         screen.blit(mode, (PANEL_X + PANEL_W - 16 - mode.get_width(),
                            PANEL_Y + 28))
 
-        self.draw_note(screen, x, PANEL_Y + 214, width)
+        # Timed mode has an extra bar above this, so the note sits lower
+        # there to keep clear of it.
+        self.draw_note(screen, x, PANEL_Y + (246 if self.timed else 214), width)
 
         track = self.audio.now_playing()
         if track:
@@ -5293,11 +5356,15 @@ class Game:
         offset = self.shake_offset()
         
         # Draw background directly to screen (no shake applied)
-        photo = self.background_for_level() if background else None
-        if photo is None:
-            screen.fill(BG)
-        else:
-            screen.blit(photo, (0, 0))
+        # Only paint a backdrop when this surface owns it. On the letterboxed
+        # path the Display has already drawn the background, and filling here
+        # put an opaque block over it - which flashed in and out with shake.
+        if background:
+            photo = self.background_for_level()
+            if photo is None:
+                screen.fill(BG)
+            else:
+                screen.blit(photo, (0, 0))
         
         # Draw board and UI to a temporary surface with shake offset applied
         if offset == (0, 0):
@@ -5316,6 +5383,12 @@ class Game:
         if target is not screen:
             # Translate (don't scale) the board/UI by the shake offset
             screen.blit(target, offset)
+
+    def flat_fade(self):
+        """0..1 fade used instead of the fly-off when smooth is switched off."""
+        if self.state == "flyoff":
+            return clamp01(self.t / max(0.01, FLYOFF_TIME))
+        return 1.0
 
     def draw_transition(self, screen, background=True):
         """Gems flying off, then the LEVEL banner over an empty board."""
