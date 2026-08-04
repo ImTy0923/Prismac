@@ -135,6 +135,7 @@ RAINBOW_CHARGE = 0.55      # hypercube shaking before anything pops
 RAINBOW_STEP = 0.055       # gap between each gem being taken out
 RAINBOW_TAIL = 0.30        # a beat after the last one
 RAINBOW_MAX = 1.9          # hard ceiling, so a board wipe cannot drag
+CHAIN_STEP = 0.10          # delay between chained explosion steps
 ZAP_EVERY = 2              # play the zap sound on every Nth gem
 EXTRA_ROW = 52             # tall enough for a label and its blurb
 
@@ -3289,6 +3290,7 @@ class Game:
         self.go_left = 0.0
         self.flyers = []
         self.debris = []
+        self.scheduled_actions = []
         self.multi_run = False
         self.move_pending = False
         self.spent_bombs = set()
@@ -3532,6 +3534,77 @@ class Game:
         self.effects.append(Effect(anim,
                                    BOARD_X + int((c + 0.5) * TILE),
                                    BOARD_Y + int((r + 0.5) * TILE)))
+
+    def schedule_action(self, delay, func, *args, **kwargs):
+        if delay <= 0:
+            func(*args, **kwargs)
+            return
+        self.scheduled_actions.append([delay, func, args, kwargs])
+
+    def update_scheduled_actions(self, dt):
+        if not self.scheduled_actions:
+            return
+        remaining = []
+        for delay, func, args, kwargs in self.scheduled_actions:
+            delay -= dt
+            if delay <= 0:
+                func(*args, **kwargs)
+            else:
+                remaining.append([delay, func, args, kwargs])
+        self.scheduled_actions = remaining
+
+    def select_hurl_cells(self, blast, source, max_cells=4):
+        if len(blast) <= max_cells:
+            return blast
+        if source not in blast:
+            return set(sorted(blast)[:max_cells])
+        others = [cell for cell in blast if cell != source]
+        others.sort(key=lambda rc: abs(rc[0] - source[0]) + abs(rc[1] - source[1]))
+        return {source} | set(others[:max_cells - 1])
+
+    def explosion_chain(self, sources):
+        chain = []
+        queue = list(sorted(sources))
+        seen = set(queue)
+        while queue:
+            r, c = queue.pop()
+            blast = {(r, c)}
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    if dr == 0 and dc == 0:
+                        continue
+                    rr, cc = r + dr, c + dc
+                    if not in_bounds(rr, cc):
+                        continue
+                    gem = self.grid[rr][cc]
+                    if gem is None:
+                        continue
+                    if ((gem.cell_type == CELL_GEM and gem.power == FLAME)
+                            or gem.cell_type == CELL_BOMB):
+                        if (rr, cc) not in seen:
+                            queue.append((rr, cc))
+                            seen.add((rr, cc))
+                        continue
+                    blast.add((rr, cc))
+            chain.append(((r, c), blast))
+        return chain
+
+    def execute_scheduled_explosion(self, source, blast, max_hurl=4):
+        r, c = source
+        if self.bubbly and blast:
+            hurl_cells = self.select_hurl_cells(blast, source, max_cells=max_hurl)
+            self.hurl_blast(hurl_cells, source)
+        self.spawn_effect("explode", r, c)
+        self.spawn_smoke(r, c)
+        self.audio.play("explode")
+        self.add_shake(SHAKE_FLAME * 0.5)
+
+    def schedule_explosion_chain(self, sources, max_hurl=4):
+        for step, (source, blast) in enumerate(self.explosion_chain(sources)):
+            self.schedule_action(step * CHAIN_STEP,
+                                 self.execute_scheduled_explosion,
+                                 source, blast,
+                                 max_hurl=max_hurl)
 
     def hurl_blast(self, cells, origin):
         """Throw the gems an explosion destroyed off the screen.
@@ -4406,6 +4479,8 @@ class Game:
             for piece in self.debris:
                 piece.update(dt)
             self.debris = [p for p in self.debris if p.t < p.delay + 0.95]
+        if self.scheduled_actions:
+            self.update_scheduled_actions(dt)
         if self.credits_open:
             self.credit_scroll += CREDIT_SPEED * dt
             if self.credit_scroll > self.credits_height():
@@ -4571,18 +4646,19 @@ class Game:
             r, c = self.rainbow_targets[self.rainbow_done]
             self.rainbow_done += 1
             self.rainbow_bolts.append((self.rainbow_origin, (r, c), 0.16))
-            # Check if this gem is a flame gem and spawn explosion effect
+            # Check if this gem is a flame gem or bomb and spawn explosion
+            # effects immediately when the rainbow zaps it.
             gem = self.grid[r][c]
-            # Throw this gem as it is destroyed, so the board empties one
-            # piece at a time instead of everything leaving at the end.
-            if gem is not None and self.bubbly:
-                self.hurl_blast({(r, c)}, self.rainbow_origin)
-            if gem is not None and gem.power == FLAME:
+            if gem is not None and (gem.power == FLAME or gem.cell_type == CELL_BOMB):
+                if self.bubbly:
+                    self.schedule_explosion_chain({(r, c)}, max_hurl=2)
                 self.spawn_effect("explode", r, c)
                 self.spawn_smoke(r, c)
                 self.audio.play("explode")
                 self.add_shake(SHAKE_FLAME * 0.5)
             else:
+                if self.bubbly:
+                    self.hurl_blast({(r, c)}, self.rainbow_origin)
                 self.spawn_effect("match", r, c)
             if self.rainbow_done % ZAP_EVERY == 0:
                 self.audio.play("rainbowzap")
@@ -4709,13 +4785,15 @@ class Game:
         self.matched = cells
         self.spawns = spawns
         self.award_time(cells)
+        explosive_cells = set()
         for r, c in cells:
             gem = self.grid[r][c]
-            if gem is not None and gem.power == FLAME:
-                self.spawn_effect("explode", r, c)
-                self.spawn_smoke(r, c)
-            else:
-                self.spawn_effect("match", r, c)
+            if gem is not None and (gem.power == FLAME or gem.cell_type == CELL_BOMB):
+                explosive_cells.add((r, c))
+        for r, c in cells:
+            if (r, c) in explosive_cells:
+                continue
+            self.spawn_effect("match", r, c)
         if not self.scoring:
             gained = 0
         elif self.extra("lock"):
@@ -4761,7 +4839,7 @@ class Game:
         flames = [rc for rc in cells
                   if self.grid[rc[0]][rc[1]] is not None
                   and self.grid[rc[0]][rc[1]].power == FLAME]
-        if flames:
+        if flames and not is_rainbow:
             self.add_shake(SHAKE_FLAME)
             self.audio.play("explode")
             self.hurl_blast(cells, flames[0])
@@ -5137,7 +5215,10 @@ class Game:
 
         # Timed mode has an extra bar above this, so the note sits lower
         # there to keep clear of it.
-        self.draw_note(screen, x, PANEL_Y + (246 if self.timed else 214), width)
+        note_y = PANEL_Y + (246 if self.timed else 214)
+        if self.mode == EXTRAS and self.timed and self.extra("lock"):
+            note_y -= 6
+        self.draw_note(screen, x, note_y, width)
 
         track = self.audio.now_playing()
         if track:
