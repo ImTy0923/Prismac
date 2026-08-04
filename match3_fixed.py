@@ -5438,6 +5438,10 @@ class Game:
             for piece in self.debris:
                 piece.draw_at(surface, place, scale)
 
+        if self.state == "flyoff":
+            for flyer in self.flyers:
+                flyer.draw_at(surface, place, scale)
+
     def draw_banner_at(self, surface, place, scale):
         image = self.banner
         if image is None:
@@ -5599,11 +5603,8 @@ class Game:
         if self.state == "levelup":
             self.draw_levelup(screen)
 
-        # Draw flyoff gems and banner in front of the board UI.
-        if self.state == "flyoff":
-            for flyer in self.flyers:
-                flyer.draw(screen)
-        elif self.state == "banner":
+        # Draw the level banner in front of the board UI if needed.
+        if self.state == "banner":
             dx, alpha = self.banner_pose()
             alpha = max(0, min(255, alpha))
             cx = BOARD_X + BOARD_W // 2 + dx
