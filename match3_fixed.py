@@ -224,6 +224,10 @@ def _glass(rgb, base_alpha):
 
 PANEL_FILL = _glass((34, 40, 66), 236)
 PANEL_EDGE = (108, 128, 196, 130)
+# Dialog boxes are NOT glass: the side panel wants to show the board through
+# it, but a menu you are reading needs to be solid.
+DIALOG_FILL = (28, 33, 56, 250)
+DIALOG_EDGE = (128, 148, 214, 190)
 BOARD_FILL = _glass((26, 31, 54), 218)
 CELL_HI = (140, 168, 255, 20)          # the lighter checker squares
 BTN = _glass((48, 58, 96), 238)
@@ -2514,14 +2518,17 @@ class FlyingGem:
         box = box.inflate(2, 2).clip(sprite.get_rect())
         return sprite.subsurface(box).copy() if box.width and box.height else sprite
 
-    def __init__(self, image, x, y, delay):
+    def __init__(self, image, x, y, delay, origin=None, force=1.0):
         self.image = self.crop(image)
         self.x, self.y = x, y
-        # thrown outward from the middle of the board, so the whole board
-        # scatters rather than everything drifting the same way
-        cx, cy = BOARD_X + BOARD_W / 2, BOARD_Y + BOARD_H / 2
-        angle = math.atan2(y - cy, x - cx) + random.uniform(-0.5, 0.5)
-        speed = random.uniform(620, 1150)
+        # Thrown outward from a centre: the middle of the board for a level
+        # transition, or the blast itself for an explosion.
+        cx, cy = origin or (BOARD_X + BOARD_W / 2, BOARD_Y + BOARD_H / 2)
+        if abs(x - cx) < 1 and abs(y - cy) < 1:
+            angle = random.uniform(0, math.tau)      # sitting on the centre
+        else:
+            angle = math.atan2(y - cy, x - cx) + random.uniform(-0.5, 0.5)
+        speed = random.uniform(620, 1150) * force
         self.dx = math.cos(angle) * speed
         self.dy = math.sin(angle) * speed - random.uniform(120, 300)
         self.spin = random.uniform(-620, 620)
@@ -2530,6 +2537,23 @@ class FlyingGem:
 
     def update(self, dt):
         self.t += dt
+
+    def draw_at(self, surface, place, scale):
+        """Same motion, but plotted in display coordinates so a gem can fly
+        past the edge of the 4:3 area and off the real screen."""
+        p = self.t - self.delay
+        if p <= 0:
+            x, y = place(self.x - TILE / 2, self.y - TILE / 2)
+            art = self.image if scale == 1 else pygame.transform.smoothscale(
+                self.image, (max(1, int(TILE * scale)),) * 2)
+            surface.blit(art, (int(x), int(y)))
+            return
+        image = pygame.transform.rotozoom(self.image, self.spin * p, scale)
+        fade = max(0, int(255 * (1.0 - clamp01(p / 0.75))))
+        image.set_alpha(fade)
+        cx, cy = place(self.x + self.dx * p,
+                       self.y + self.dy * p + 900 * p * p)
+        surface.blit(image, image.get_rect(center=(int(cx), int(cy))))
 
     def draw(self, screen):
         p = self.t - self.delay
@@ -2856,11 +2880,8 @@ class Game:
             self.wipe_held = max(0.0, self.wipe_held - dt * 2.5)
 
     def draw_wipe(self, screen):
-        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        veil.fill((6, 8, 18, 210))
-        screen.blit(veil, (0, 0))
         box = self.wipe_rect()
-        screen.blit(translucent(box.size, PANEL_FILL, (232, 92, 92, 160), 16),
+        screen.blit(translucent(box.size, DIALOG_FILL, (232, 92, 92, 250), 16),
                     box.topleft)
         lines = [(self.font_big, "ERASE ALL SAVE DATA?", (255, 140, 140)),
                  (self.font_small, "SAVED RUNS AND SETTINGS", DIM),
@@ -2880,7 +2901,7 @@ class Game:
             width = int(yes.rect.width * frac)
             if width > 2:
                 screen.blit(translucent((width, yes.rect.height),
-                                        (232, 92, 92, 190), None, 10),
+                                        (232, 92, 92, 245), None, 10),
                             yes.rect.topleft)
                 label = self.font.render("YES", True, TEXT)
                 screen.blit(label, label.get_rect(center=yes.rect.center))
@@ -2909,11 +2930,8 @@ class Game:
         self.start_game(self.resume_mode)
 
     def draw_resume(self, screen):
-        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        veil.fill((6, 8, 18, 200))
-        screen.blit(veil, (0, 0))
         box = self.resume_rect()
-        screen.blit(translucent(box.size, PANEL_FILL, PANEL_EDGE, 16),
+        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, 16),
                     box.topleft)
         entry = read_saves().get(self.resume_mode) or {}
         lines = [(self.font_big, "CONTINUE?", TEXT),
@@ -2930,11 +2948,8 @@ class Game:
             button.draw(screen, self.font)
 
     def draw_duration_picker(self, screen):
-        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        veil.fill((6, 8, 18, 200))
-        screen.blit(veil, (0, 0))
         box = self.duration_picker_rect()
-        screen.blit(translucent(box.size, PANEL_FILL, PANEL_EDGE, 16),
+        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, 16),
                     box.topleft)
         title = self.font_big.render("SELECT DURATION", True, TEXT)
         screen.blit(title, (box.centerx - title.get_width() // 2, box.y + 20))
@@ -2990,10 +3005,6 @@ class Game:
                 screen.blit(art, (0, 0))
             else:
                 screen.fill(BG)
-        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        veil.fill((6, 8, 18, 120))
-        screen.blit(veil, (0, 0))
-
         cx = WIDTH // 2
         top = HEIGHT - self.credit_scroll
 
@@ -3185,6 +3196,14 @@ class Game:
             prompt.set_alpha(int(120 + 135 * pulse))
             screen.blit(prompt, prompt.get_rect(center=(WIDTH // 2, 470)))
 
+        # Darken the title art itself. A translucent veil blitted onto this
+        # SRCALPHA layer does not composite reliably, so this multiplies the
+        # colour down instead - the logo dims but keeps its shape.
+        alpha = self.overlay_veil()
+        if alpha:
+            k = max(0, 255 - alpha)
+            screen.fill((k, k, k, 255), special_flags=pygame.BLEND_RGBA_MULT)
+
         if self.data_wiped:
             self.draw_wiped(screen)
             return
@@ -3208,11 +3227,8 @@ class Game:
                              HEIGHT - 20 - credit.get_height()))
 
     def draw_extras(self, screen):
-        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        veil.fill((6, 8, 18, 200))
-        screen.blit(veil, (0, 0))
         box = self.extras_rect()
-        screen.blit(translucent(box.size, PANEL_FILL, PANEL_EDGE, 16),
+        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, 16),
                     box.topleft)
         title = self.font_big.render("EXTRAS", True, TEXT)
         screen.blit(title, (box.x + 26, box.y + 24))
@@ -3272,6 +3288,7 @@ class Game:
         self.effects = []
         self.go_left = 0.0
         self.flyers = []
+        self.debris = []
         self.multi_run = False
         self.move_pending = False
         self.spent_bombs = set()
@@ -3515,6 +3532,29 @@ class Game:
         self.effects.append(Effect(anim,
                                    BOARD_X + int((c + 0.5) * TILE),
                                    BOARD_Y + int((r + 0.5) * TILE)))
+
+    def hurl_blast(self, cells, origin):
+        """Throw the gems an explosion destroyed off the screen.
+
+        Only with smooth animation on - flat mode keeps the plain pop.
+        """
+        if not self.bubbly or not cells:
+            return
+        if getattr(self, "rainbow_thrown", False):
+            self.rainbow_thrown = False
+            return          # already thrown one at a time during the zap
+        ox = BOARD_X + (origin[1] + 0.5) * TILE
+        oy = BOARD_Y + (origin[0] + 0.5) * TILE
+        for r, c in list(cells)[:MAX_EFFECTS]:
+            gem = self.grid[r][c]
+            if gem is None or gem.cell_type == CELL_EMPTY:
+                continue
+            self.debris.append(FlyingGem(
+                self.sprite_for(gem),
+                BOARD_X + (c + 0.5) * TILE,
+                BOARD_Y + (r + 0.5) * TILE,
+                random.uniform(0.0, 0.05),
+                origin=(ox, oy), force=0.75))
 
     def puff_cells(self, cells, per_cell=3, force=0.5):
         """A small amount of smoke spread over many cells.
@@ -4019,11 +4059,8 @@ class Game:
         return True
 
     def draw_wiped(self, screen):
-        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        veil.fill((6, 8, 18, 232))
-        screen.blit(veil, (0, 0))
         box = pygame.Rect(WIDTH // 2 - 230, HEIGHT // 2 - 90, 460, 180)
-        screen.blit(translucent(box.size, PANEL_FILL, PANEL_EDGE, 16),
+        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, 16),
                     box.topleft)
         lines = [(self.font_big, "DATA RESET", GOLD),
                  (self.font_small, "ALL SAVES AND SETTINGS DELETED", DIM),
@@ -4363,6 +4400,12 @@ class Game:
 
     def update(self, dt):
         self.time += dt
+        # Debris from explosions lives outside the state machine so it always
+        # finishes its arc, whatever the board is doing.
+        if self.debris:
+            for piece in self.debris:
+                piece.update(dt)
+            self.debris = [p for p in self.debris if p.t < p.delay + 0.95]
         if self.credits_open:
             self.credit_scroll += CREDIT_SPEED * dt
             if self.credit_scroll > self.credits_height():
@@ -4530,10 +4573,15 @@ class Game:
             self.rainbow_bolts.append((self.rainbow_origin, (r, c), 0.16))
             # Check if this gem is a flame gem and spawn explosion effect
             gem = self.grid[r][c]
+            # Throw this gem as it is destroyed, so the board empties one
+            # piece at a time instead of everything leaving at the end.
+            if gem is not None and self.bubbly:
+                self.hurl_blast({(r, c)}, self.rainbow_origin)
             if gem is not None and gem.power == FLAME:
                 self.spawn_effect("explode", r, c)
                 self.spawn_smoke(r, c)
                 self.audio.play("explode")
+                self.add_shake(SHAKE_FLAME * 0.5)
             else:
                 self.spawn_effect("match", r, c)
             if self.rainbow_done % ZAP_EVERY == 0:
@@ -4710,10 +4758,13 @@ class Game:
         self.audio.play_match(self.cascade, self.multi_run)
         for power in spawns.values():
             self.audio.play("hypermade" if power == HYPER else "flamemade")
-        if any(self.grid[r][c] is not None and self.grid[r][c].power == FLAME
-               for r, c in cells):
+        flames = [rc for rc in cells
+                  if self.grid[rc[0]][rc[1]] is not None
+                  and self.grid[rc[0]][rc[1]].power == FLAME]
+        if flames:
             self.add_shake(SHAKE_FLAME)
             self.audio.play("explode")
+            self.hurl_blast(cells, flames[0])
         if HYPER in spawns.values():
             self.set_note("HYPERCUBE!")
         elif FLAME in spawns.values():
@@ -4781,6 +4832,8 @@ class Game:
             for r, c in self.spent_bombs:
                 self.spawn_effect("explode", r, c)
                 self.spawn_smoke(r, c)
+            if self.spent_bombs:
+                self.hurl_blast(blast, next(iter(self.spent_bombs)))
             self.begin_clear(blast, {})
             return
         if self.scoring and self.level_progress() >= 1.0:
@@ -5178,12 +5231,9 @@ class Game:
         screen.blit(image, image.get_rect(center=center))
 
     def draw_over(self, screen):
-        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        veil.fill((8, 9, 13, 200))
-        screen.blit(veil, (0, 0))
 
         box = self.over_rect()
-        screen.blit(translucent(box.size, PANEL_FILL, PANEL_EDGE, 16),
+        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, 16),
                     box.topleft)
 
         lines = [(self.font_huge, "TIME UP", TEXT, 30),
@@ -5200,11 +5250,8 @@ class Game:
             button.draw(screen, self.font)
 
     def draw_music(self, screen):
-        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        veil.fill((8, 9, 13, 190))
-        screen.blit(veil, (0, 0))
         box = self.music_rect()
-        screen.blit(translucent(box.size, PANEL_FILL, PANEL_EDGE, 16),
+        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, 16),
                     box.topleft)
         title = self.font_big.render("MUSIC", True, TEXT)
         screen.blit(title, (box.x + 24, box.y + 24))
@@ -5215,11 +5262,8 @@ class Game:
             button.draw(screen, self.font)
 
     def draw_background_picker(self, screen):
-        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        veil.fill((8, 9, 13, 190))
-        screen.blit(veil, (0, 0))
         box = self.music_rect()
-        screen.blit(translucent(box.size, PANEL_FILL, PANEL_EDGE, 16),
+        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, 16),
                     box.topleft)
         title = self.font_big.render("BACKGROUNDS", True, TEXT)
         screen.blit(title, (box.x + 24, box.y + 24))
@@ -5230,9 +5274,6 @@ class Game:
             button.draw(screen, self.font)
 
     def draw_menu(self, screen):
-        veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        veil.fill((8, 9, 13, 190))
-        screen.blit(veil, (0, 0))
 
         box = self.menu_rect()
         screen.blit(self.menu_bg, box.topleft)
@@ -5334,6 +5375,84 @@ class Game:
         self._blocks = {}
         self.frame = None
 
+    def overlay_veil(self):
+        """Alpha of the dimming behind whichever overlay is open, or 0.
+
+        The credits roll dims lightly over its own artwork.
+
+        Drawn across the whole display rather than the 4:3 layer, so the
+        letterbox bars dim with everything else.
+        """
+        if self.data_wiped:
+            return 244
+        if self.credits_open:
+            return 120
+        if self.wipe_open:
+            return 232
+        if (self.menu_open or self.music_open or self.bg_picker_open
+                or self.extras_open or self.resume_open
+                or self.timed_duration_picker_open):
+            return 226
+        if self.over:
+            return 214
+        return 0
+
+    def draw_wide(self, surface, scale, offset, under):
+        """Effects that should span the WHOLE display, not the 4:3 layer.
+
+        Drawn straight onto the display in its own coordinates: background
+        motes underneath the UI, flying gems and the level banner on top, so
+        in fullscreen they carry on past the letterbox bars.
+        """
+        dw, dh = surface.get_size()
+
+        def place(x, y):
+            return x * scale + offset[0], y * scale + offset[1]
+
+        if under:
+            if self.settings.get("particles", True):
+                layer = pygame.Surface((dw, dh), pygame.SRCALPHA)
+                span = max(dw, dh)
+                for mx, my, size, _, alpha in self.motes:
+                    # motes live in a 0..1 space so they cover any window
+                    pygame.draw.circle(
+                        layer, (170, 190, 255, int(alpha * 34)),
+                        (int(mx / WIDTH * dw), int(my / HEIGHT * dh)),
+                        max(1, int(size * scale)))
+                surface.blit(layer, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+            # The transition art goes here, BEFORE the veil and before the
+            # UI layer, so an open menu sits cleanly on top of it.
+            for flyer in self.flyers:
+                flyer.draw_at(surface, place, scale)
+            if self.state == "banner" and not self.on_title:
+                self.draw_banner_at(surface, place, scale)
+
+            alpha = self.overlay_veil()
+            if alpha:
+                veil = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+                veil.fill((7, 8, 16, alpha))
+                surface.blit(veil, (0, 0))
+            return
+
+        # debris still flies over the board, but not over an open menu
+        if not self.overlay_veil():
+            for piece in self.debris:
+                piece.draw_at(surface, place, scale)
+
+    def draw_banner_at(self, surface, place, scale):
+        image = self.banner
+        if image is None:
+            return
+        dx, alpha = self.banner_pose()
+        if alpha <= 0:
+            return
+        size = (max(1, int(image.get_width() * scale)),
+                max(1, int(image.get_height() * scale)))
+        art = pygame.transform.smoothscale(image, size)
+        art.set_alpha(max(0, min(255, alpha)))
+        cx, cy = place(BOARD_X + BOARD_W / 2 + dx, BOARD_Y + BOARD_H / 2)
+        surface.blit(art, art.get_rect(center=(int(cx), int(cy))))
+
     def backdrop_photo(self):
         if not self.settings.get("backgrounds", True) and not self.on_title:
             return None
@@ -5407,13 +5526,9 @@ class Game:
                 m[0] = random.uniform(0, WIDTH)
 
     def draw_motes(self, screen):
-        if not self.settings.get("particles", True):
-            return
-        layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        for x, y, size, _, alpha in self.motes:
-            pygame.draw.circle(layer, (150, 175, 255, int(alpha * 30)),
-                               (int(x), int(y)), max(1, int(size)))
-        screen.blit(layer, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+        """No-op: the motes are painted across the whole display by
+        draw_wide(), so they are not confined to the 4:3 area."""
+        return
 
     def draw_scene(self, screen, background=True):
         if not background:
@@ -5487,8 +5602,7 @@ class Game:
         
         # Draw flyoff gems and banner before menus so menus appear on top
         if self.state == "flyoff":
-            for flyer in self.flyers:
-                flyer.draw(screen)
+            pass          # flyers are drawn full-screen by draw_wide()
         elif self.state == "banner":
             dx, alpha = self.banner_pose()
             alpha = max(0, min(255, alpha))
@@ -5506,6 +5620,14 @@ class Game:
             screen.blit(label, label.get_rect(
                 center=(cx, cy + image.get_height() // 2 + 26)))
         
+        # Dim the board and side panel before any overlay. The display-space
+        # veil sits UNDER this layer, so without this the board stayed at full
+        # brightness behind a menu.
+        alpha = self.overlay_veil()
+        if alpha:
+            k = max(0, 255 - alpha)
+            screen.fill((k, k, k, 255), special_flags=pygame.BLEND_RGBA_MULT)
+
         # Draw menus last so they appear on top
         if self.menu_open:
             self.draw_menu(screen)
@@ -5591,6 +5713,8 @@ class Display:
         if photo is not None:
             self.cover(photo)
 
+        game.draw_wide(self.surface, self.scale, self.offset, under=True)
+
         self.layer.fill((0, 0, 0, 0))
         game.draw(self.layer, background=False)
 
@@ -5601,6 +5725,8 @@ class Display:
                     max(1, int(HEIGHT * self.scale)))
             self.surface.blit(pygame.transform.smoothscale(self.layer, size),
                               self.offset)
+
+        game.draw_wide(self.surface, self.scale, self.offset, under=False)
         pygame.display.flip()
 
 
