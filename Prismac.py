@@ -276,6 +276,7 @@ SFX_DIR = asset_folder("soundeffects")
 MUSIC_DIR = asset_folder("music")
 EFFECT_DIR = asset_folder("effects")
 BACKGROUND_DIR = asset_folder("backgrounds")
+BACKGROUND_FADE_TIME = 0.8
 UI_DIR = asset_folder("ui")
 CHAOS_DIR = asset_folder("chaos")
 TITLE_DIR = asset_folder("title")
@@ -2777,6 +2778,10 @@ class Game:
         self.timed_duration_choice = 90.0  # default 1:30
         self.bg_index_override = None  # track current background override
         self.bg_index = 0  # cached random background index
+        self.bg_transition_active = False
+        self.bg_transition = 0.0
+        self.bg_transition_from = None
+        self.bg_transition_to = None
         self.bg_picker_open = False
         self.note_time = 0.0  # timer for note fade in/out
         self.reset()
@@ -3464,10 +3469,22 @@ class Game:
     def background_for_level(self):
         if not self.backgrounds:
             return None
-        # If user cycled with button, use that; otherwise use cached random selection
         if self.bg_index_override is not None:
             return self.backgrounds[self.bg_index_override]
         return self.backgrounds[self.bg_index]
+
+    def advance_background(self):
+        """Move to the next background for the next level, if no override is active."""
+        if not self.backgrounds:
+            return
+        if self.bg_index_override is not None:
+            return
+        if len(self.backgrounds) < 2:
+            return
+        self.bg_index = (self.bg_index + 1) % len(self.backgrounds)
+
+    def update_background_transition(self, dt):
+        return
 
     # -- effects ----------------------------------------------------------
 
@@ -3709,6 +3726,7 @@ class Game:
         a beat -> the new board rains in -> a beat -> GO!
         """
         self.level_floor += self.level_target()   # overflow carries forward
+        self.advance_background()
         self.level += 1
         self.sel = None
         self.press = None
