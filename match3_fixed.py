@@ -5420,10 +5420,9 @@ class Game:
                         (int(mx / WIDTH * dw), int(my / HEIGHT * dh)),
                         max(1, int(size * scale)))
                 surface.blit(layer, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
-            # The transition art goes here, BEFORE the veil and before the
-            # UI layer, so an open menu sits cleanly on top of it.
-            for flyer in self.flyers:
-                flyer.draw_at(surface, place, scale)
+            # The transition art that belongs behind the 4:3 UI layer.
+            # The board-level banner still goes here, but flying gems should
+            # appear over the board and side panel instead.
             if self.state == "banner" and not self.on_title:
                 self.draw_banner_at(surface, place, scale)
 
@@ -5599,10 +5598,11 @@ class Game:
 
         if self.state == "levelup":
             self.draw_levelup(screen)
-        
-        # Draw flyoff gems and banner before menus so menus appear on top
+
+        # Draw flyoff gems and banner in front of the board UI.
         if self.state == "flyoff":
-            pass          # flyers are drawn full-screen by draw_wide()
+            for flyer in self.flyers:
+                flyer.draw(screen)
         elif self.state == "banner":
             dx, alpha = self.banner_pose()
             alpha = max(0, min(255, alpha))
@@ -5619,7 +5619,7 @@ class Game:
             label.set_alpha(alpha)
             screen.blit(label, label.get_rect(
                 center=(cx, cy + image.get_height() // 2 + 26)))
-        
+
         # Dim the board and side panel before any overlay. The display-space
         # veil sits UNDER this layer, so without this the board stayed at full
         # brightness behind a menu.
