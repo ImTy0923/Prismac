@@ -293,29 +293,83 @@ SAVED_MODES = (ENDLESS, SHAPES) if False else ("endless", "shapes")
 CREDITS_TEXT = (
     ("t", "PRISMAC"),
     ("s", ""), ("s", ""),
-    ("h", "CREATION & DEVELOPMENT"), ("r", ""),
-    ("", "CREATED & DEVELOPED BY"), ("b", "TY FUKUSHIMA"),
-    ("s", ""),
-    ("", "PROGRAMMING"), ("b", "TY FUKUSHIMA"),
-    ("s", ""),
-    ("", "BUILT WITH"), ("b", "PYTHON, PYGAME"),
-    ("s", ""),
-    ("", "DEVELOPMENT ASSISTANCE"), ("b", "CLAUDE CODE, CHATGPT CODEX"),
+
+    ("h", "CREATED BY"), ("r", ""),
+    ("b", "TY FUKUSHIMA"),
     ("s", ""), ("s", ""),
+
+    ("h", "GAME DESIGN"), ("r", ""),
+    ("", "GAME DESIGN"), ("b", "TY FUKUSHIMA"),
+    ("", "GAMEPLAY DESIGN"), ("b", "TY FUKUSHIMA"),
+    ("", "LEVEL AND MODE DESIGN"), ("b", "TY FUKUSHIMA"),
+    ("", "SYSTEMS DESIGN"), ("b", "TY FUKUSHIMA"),
+    ("s", ""), ("s", ""),
+
+    ("h", "PROGRAMMING"), ("r", ""),
+    ("", "LEAD PROGRAMMER"), ("b", "TY FUKUSHIMA"),
+    ("", "ENGINE / FRAMEWORK"), ("b", "PYTHON, PYGAME"),
+    ("", "PROGRAMMING ASSISTANCE"),
+    ("b", "CLAUDE CODE"), ("b", "CHATGPT CODEX"),
+    ("s", ""), ("s", ""),
+
+    ("h", "ART AND DESIGN"), ("r", ""),
+    ("", "ART DIRECTION"), ("b", "TY FUKUSHIMA"),
+    ("", "UI / INTERFACE DESIGN"), ("b", "TY FUKUSHIMA"),
+    ("", "VISUAL DESIGN"), ("b", "TY FUKUSHIMA"),
+    ("", "PIXEL ART EDITING"), ("b", "TY FUKUSHIMA"),
+    ("s", ""), ("s", ""),
+
+    ("h", "AUDIO DIRECTION"), ("r", ""),
+    ("", "AUDIO SELECTION"), ("b", "TY FUKUSHIMA"),
+    ("", "MUSIC AND SOUND INTEGRATION"), ("b", "TY FUKUSHIMA"),
+    ("s", ""), ("s", ""),
+
+    ("h", "EFFECTS"), ("r", ""),
+    ("b", "TY FUKUSHIMA"),
+    ("s", ""), ("s", ""),
+
     ("h", "ART ASSETS"), ("r", ""),
     ("", "GEM ASSETS"),
-    ("b", "COLORED GEMS BY B2719680"),
+    ("b", "COLORED GEMS"), ("b", "BY B2719680"),
+    ("s", ""),
+    ("", "ADDITIONAL ARTWORK"),
     ("b", "RAINBOW, ROCK AND BOMB GEMS"),
     ("b", "CREATED IN ADOBE PHOTOSHOP"),
     ("s", ""),
-    ("", "BACKGROUND SOURCES"),
-    ("b", "VECTEEZY"), ("b", "PIXABAY"), ("b", "FREEPIK"),
-    ("b", "ADOBE STOCK"),
-    ("b", "REDDIT R/KINGDOMHEARTS"), ("b", "REDDIT R/PIXELART"),
+    ("", "PIXEL ART BACKGROUNDS"),
+    ("b", "PIXEL ART BACKGROUNDS 10"),
+    ("b", "SKY CLOUD - BY ARLUDUS"),
     ("s", ""),
-    ("", "EFFECTS"), ("b", "SMOKE EFFECT FROM ADOBE STOCK"),
+    ("b", "PIXEL ART BACKGROUNDS"), ("b", "BY FLORESWA"),
+    ("s", ""),
+    ("b", "VARIOUS BACKGROUNDS"), ("b", "BY STEALTHIX"),
+    ("s", ""),
+    ("b", "SWAMP PIXEL GAME BACKGROUNDS"),
+    ("b", "BY FREE GAME ASSETS"),
+    ("s", ""),
+    ("", "OTHER BACKGROUND SOURCES"),
+    ("b", "VECTEEZY"), ("b", "PIXABAY"),
+    ("b", "FREEPIK"), ("b", "ADOBE STOCK"),
+    ("s", ""),
+    ("", "COMMUNITY INSPIRATION"),
+    ("b", "R/KINGDOMHEARTS"), ("b", "R/PIXELART"),
     ("s", ""), ("s", ""),
-    ("h", "MUSIC & AUDIO"), ("r", ""),
+
+    ("h", "SOUND EFFECTS"), ("r", ""),
+    ("b", "UNIVERSAL UI/MENU SOUNDPACK"),
+    ("b", "BY CYREX STUDIOS"),
+    ("s", ""),
+    ("b", "TRIPLE TREAT"),
+    ("b", "SOUND EFFECTS FOR MATCH-3 GAMES"),
+    ("b", "BY SABLE BLOOM"),
+    ("s", ""),
+    ("", "INSPIRED BY"),
+    ("b", "BEJEWELED (2001)"),
+    ("b", "BEJEWELED 2 DELUXE (2004)"),
+    ("b", "BY POPCAP GAMES"),
+    ("s", ""), ("s", ""),
+
+    ("h", "MUSIC AND AUDIO"), ("r", ""),
     ("", "PIXABAY FREE USE MUSIC"),
     ("b", "PRIVATE CHAN"), ("b", "DJARTMUSIC"),
     ("b", "NOCOPYRIGHTSOUNDS633"), ("b", "MOODMODE"),
@@ -324,25 +378,26 @@ CREDITS_TEXT = (
     ("", "YOUTUBE"), ("b", "8-BIT UNIVERSE"),
     ("s", ""),
     ("", "FEATURED SONGS"),
-    ("b", "SIMPLE AND CLEAN - HIKARU UTADA"),
-    ("b", "ROXAS - YOKO SHIMOMURA"),
-    ("b", "BLUE (DA BA DEE) - EIFFEL 65"),
-    ("b", "GET LUCKY - DAFT PUNK"),
-    ("b", "LAST FRIDAY NIGHT - KATY PERRY"),
-    ("b", "SMELLS LIKE TEEN SPIRIT - NIRVANA"),
+    ("b", "SIMPLE AND CLEAN"), ("b", "HIKARU UTADA"),
+    ("s", ""),
+    ("b", "ROXAS"), ("b", "YOKO SHIMOMURA"),
+    ("s", ""),
+    ("b", "BLUE (DA BA DEE)"), ("b", "EIFFEL 65"),
+    ("s", ""),
+    ("b", "GET LUCKY"), ("b", "DAFT PUNK"),
+    ("s", ""),
+    ("b", "LAST FRIDAY NIGHT"), ("b", "KATY PERRY"),
+    ("s", ""),
+    ("b", "SMELLS LIKE TEEN SPIRIT"), ("b", "NIRVANA"),
     ("s", ""), ("s", ""),
-    ("h", "SOUND EFFECTS"), ("r", ""),
-    ("", "INSPIRED BY"),
-    ("b", "BEJEWELED (2001)"),
-    ("b", "BEJEWELED 2 DELUXE (2004)"),
-    ("b", "CREATED BY POPCAP GAMES"),
-    ("s", ""), ("s", ""),
+
     ("h", "SPECIAL THANKS"), ("r", ""),
     ("b", "THE CREATORS WHO SHARE ASSETS"),
     ("b", "WITH THE GAME DEV COMMUNITY"),
     ("s", ""),
     ("b", "EVERYONE WHO PLAYTESTED PRISMAC"),
     ("s", ""), ("s", ""),
+
     ("h", "LEGAL NOTICE"), ("r", ""),
     ("b", "PRISMAC IS AN INDEPENDENT,"),
     ("b", "NON-COMMERCIAL FAN PROJECT."),
@@ -354,13 +409,18 @@ CREDITS_TEXT = (
     ("s", ""),
     ("b", "ALL TRADEMARKS AND COPYRIGHTED WORKS"),
     ("b", "BELONG TO THEIR RESPECTIVE OWNERS."),
+    ("b", "THIRD-PARTY ASSETS ARE CREDITED"),
+    ("b", "TO THEIR ORIGINAL CREATORS."),
     ("s", ""), ("s", ""),
+
     ("t", "THANK YOU FOR PLAYING"),
     ("s", ""),
     ("", "(C) 2026 TY FUKUSHIMA"),
     ("s", ""), ("s", ""), ("s", ""),
 )
-CREDIT_SPEED = 42          # pixels per second
+
+CREDIT_SPEED = 44          # pixels per second
+CREDIT_GEMS = 20           # gems drifting behind the roll
 CREDIT_LINE = 26
 
 # title screen
@@ -2979,7 +3039,57 @@ class Game:
     def settings_rect():
         return pygame.Rect(WIDTH // 2 - 240, 128, 480, 452)
 
+    def spawn_credit_gems(self):
+        """Gems drifting behind the credits roll.
+
+        Deliberately slow and semi-transparent - they are wallpaper, not
+        something to read past.
+        """
+        self.credit_gems = []
+        margin = WIDTH * 0.22          # keep clear of the text column
+        for i in range(CREDIT_GEMS):
+            side = random.choice((0, 1))
+            self.credit_gems.append({
+                "kind": random.randrange(N_TYPES),
+                "x": (random.uniform(10, margin) if side == 0
+                      else random.uniform(WIDTH - margin, WIDTH - 10)),
+                "y": random.uniform(0, HEIGHT + 200),
+                "dy": random.uniform(-26, -9),
+                "sway": random.uniform(8, 24),
+                "phase": random.uniform(0, math.tau),
+                "spin": random.uniform(-22, 22),
+                "angle": random.uniform(0, 360),
+                "scale": random.uniform(0.34, 0.72),
+                "alpha": random.randint(55, 115),
+            })
+
+    def update_credit_gems(self, dt):
+        if not self.bubbly:
+            return
+        for g in self.credit_gems:
+            g["y"] += g["dy"] * dt
+            g["angle"] += g["spin"] * dt
+            if g["y"] < -TILE:
+                g["y"] = HEIGHT + TILE
+                margin = WIDTH * 0.22
+                g["x"] = (random.uniform(10, margin) if random.random() < 0.5
+                          else random.uniform(WIDTH - margin, WIDTH - 10))
+                g["kind"] = random.randrange(N_TYPES)
+
+    def draw_credit_gems(self, screen):
+        if not self.bubbly or not self.credit_gems:
+            return
+        for g in self.credit_gems:
+            sprite = self.normal[g["kind"] % len(self.normal)]
+            size = max(4, int(TILE * g["scale"]))
+            art = pygame.transform.rotozoom(sprite, g["angle"],
+                                            size / sprite.get_width())
+            art.set_alpha(g["alpha"])
+            x = g["x"] + math.sin(self.time * 0.5 + g["phase"]) * g["sway"]
+            screen.blit(art, art.get_rect(center=(int(x), int(g["y"]))))
+
     def open_credits(self):
+        self.spawn_credit_gems()
         self.credits_open = True
         self.credit_armed = False
         self.credit_scroll = self.start_scroll()
@@ -3024,6 +3134,8 @@ class Game:
                 screen.blit(art, (0, 0))
             else:
                 screen.fill(BG)
+        self.draw_credit_gems(screen)
+
         cx = WIDTH // 2
         top = HEIGHT - self.credit_scroll
 
@@ -3321,6 +3433,7 @@ class Game:
         self._bg_current = None
         self._bg_previous = None
         self._bg_was_title = True
+        self.credit_gems = []
         self._bg_blend = 1.0
         self.shown_score = float(getattr(self, "score", 0))
         self.shown_progress = 0.0
@@ -3914,13 +4027,15 @@ class Game:
         # RETURN TO TITLE gets the full width and a taller box - it is the
         # one people reach for most
         self.menu_buttons = [
-            Button((sx, below + 14, sw, 56), "RETURN TO TITLE",
+            # RESUME and QUIT share a row; the bottom button changes with
+            # context - RETURN TO TITLE SCREEN in a game, RESET DATA on the
+            # title screen, where wiping saves actually belongs.
+            Button((sx, below + 18, half, 52), "RESUME", self.close_menu,
+                   accent=(126, 216, 150)),
+            Button((sx + half + 20, below + 18, half, 52), "QUIT", self.quit,
+                   accent=(232, 92, 92)),
+            Button((sx, below + 82, sw, 52), "RETURN TO TITLE SCREEN",
                    self.return_to_title, accent=GOLD),
-            Button((sx, below + 82, half, 42), "RESUME", self.close_menu),
-            Button((sx + half + 20, below + 82, half, 42), "QUIT", self.quit,
-                   accent=(232, 92, 92)),
-            Button((sx, below + 134, sw, 40), "RESET DATA", self.ask_wipe,
-                   accent=(232, 92, 92)),
         ]
 
         wbox = self.wipe_rect()
@@ -4045,7 +4160,7 @@ class Game:
 
     @staticmethod
     def menu_rect():
-        return pygame.Rect(WIDTH // 2 - 230, 26, 460, 668)
+        return pygame.Rect(WIDTH // 2 - 230, 48, 460, 640)
 
     # -- button actions ---------------------------------------------------
 
@@ -4255,6 +4370,7 @@ class Game:
         self.audio.use_playlist(TITLE)
 
     def open_menu(self):
+        self.sync_menu_labels()
         # the menu takes over: nothing else stays open behind it
         self.music_open = False
         self.bg_picker_open = False
@@ -4592,6 +4708,7 @@ class Game:
         if self.scheduled_actions:
             self.update_scheduled_actions(dt)
         if self.credits_open:
+            self.update_credit_gems(dt)
             self.credit_scroll += CREDIT_SPEED * dt
             if self.credit_scroll > self.credits_height():
                 self.credit_scroll = self.start_scroll()   # loop the roll
@@ -5473,7 +5590,19 @@ class Game:
         for button in self.bg_picker_buttons:
             button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
 
+    def sync_menu_labels(self):
+        """Point the two context buttons at the right thing for where we are."""
+        bottom = self.menu_buttons[2]
+        if self.on_title:
+            bottom.label, bottom.action = "RESET DATA", self.ask_wipe
+            bottom.accent = (232, 92, 92)
+        else:
+            bottom.label = "RETURN TO TITLE SCREEN"
+            bottom.action = self.return_to_title
+            bottom.accent = GOLD
+
     def draw_menu(self, screen):
+        self.sync_menu_labels()
 
         box = self.menu_rect()
         screen.blit(self.menu_bg, box.topleft)
