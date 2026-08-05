@@ -2784,10 +2784,11 @@ class Game:
         self.font_big = load_font(3, bold=True)    # 21px
         self.font = load_font(2)                   # 14px
         self.font_small = load_font(2)
-        self.build_widgets()
-        self.build_title_widgets()
         self.timed_duration_picker_open = False
         self.timed_duration_choice = 90.0  # default 1:30
+        self.timed_bonus_gems = True
+        self.build_widgets()
+        self.build_title_widgets()
         self.bg_index_override = None  # track current background override
         self.bg_index = 0  # cached random background index
         self.bg_transition_active = False
@@ -3383,11 +3384,11 @@ class Game:
             # A new level means a new silhouette; it only stays fixed for the
             # duration of one level, including any reshuffle within it.
             self.pick_shape()
-            self.grid = new_shapes_grid(bonuses=self.timed,
+            self.grid = new_shapes_grid(bonuses=self.timed and self.timed_bonus_gems,
                                         mask=self.shape_cells)
         else:
             self.grid = self.apply_extras(
-                new_grid(bonuses=self.timed, chaos=self.extra("chaos")))
+                new_grid(bonuses=self.timed and self.timed_bonus_gems, chaos=self.extra("chaos")))
         self.begin_intro()
 
     def mode_label(self):
@@ -3868,9 +3869,9 @@ class Game:
         """
         if self.over or self.state != "idle":
             return False
-        self.grid = (new_shapes_grid(self.timed, self.shape_cells)
+        self.grid = (new_shapes_grid(self.timed and self.timed_bonus_gems, self.shape_cells)
                      if self.mode == SHAPES
-                     else new_grid(bonuses=self.timed,
+                     else new_grid(bonuses=self.timed and self.timed_bonus_gems,
                                    chaos=self.extra("chaos")))
         self.audio.play("shuffle")
         self.begin_intro()          # rains the new board in like any other
@@ -3948,6 +3949,14 @@ class Game:
         gap = 20
         total_w = btn_w * 2 + gap
         start_x = dbox.centerx - total_w // 2
+        self.timed_bonus_button = Button(
+            (dbox.centerx - 120, dbox.y + 220, 240, 44),
+            self.timed_gems_label(),
+            self.toggle_timed_bonus_gems,
+            accent=(232, 150, 96),
+            art=self.skinned("menubutton", (240, 44)),
+            art_hover=self.skinned("menubuttonhovered", (240, 44)),
+        )
         self.duration_buttons = [
     Button(
         (start_x, dbox.y + 80, btn_w, btn_h),
@@ -3981,6 +3990,7 @@ class Game:
         art=self.skinned("menubutton", (btn_w, btn_h)),
         art_hover=self.skinned("menubuttonhovered", (btn_w, btn_h)),
     ),
+    self.timed_bonus_button,
 ]
 
         self.credit_buttons = [
@@ -4073,6 +4083,14 @@ class Game:
         # Use resume_mode to know whether starting TIMED or EXTRAS with TIMED clock
         mode = self.resume_mode if self.resume_mode else TIMED
         self.reset(mode)
+
+    def toggle_timed_bonus_gems(self):
+        self.timed_bonus_gems = not self.timed_bonus_gems
+        self.timed_bonus_button.label = self.timed_gems_label()
+        self.audio.play("menuclick")
+
+    def timed_gems_label(self):
+        return f"TIMED GEMS: {'ON' if self.timed_bonus_gems else 'OFF'}"
 
     def close_duration_picker(self):
         """Dismiss the duration picker without starting."""
@@ -4955,7 +4973,7 @@ class Game:
             self.pops[(r, c)] = POP_TIME
         self.matched = set()
         self.spawns = {}
-        self.falls = collapse(self.grid, bonuses=self.timed,
+        self.falls = collapse(self.grid, bonuses=self.timed and self.timed_bonus_gems,
                               chaos=self.extra("chaos"),
                               shapes=self.mode == SHAPES,
                               boom=self.extra("boom"),
