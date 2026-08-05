@@ -196,6 +196,7 @@ BOOM_HYPER_CHANCE = 0.030
 CHAOS_ROCK_CHANCE = 0.055
 CHAOS_BOMB_CHANCE = 0.030
 
+BG_CROSSFADE = 2.6         # seconds for the new level backdrop to slide up
 BOMB_FUSE_MIN = 4
 BOMB_FUSE_MAX = 6
 
@@ -1197,18 +1198,6 @@ def plan_clear(g, runs, origin=(), score_dict=None):
     return clear, spawns
 
 
-def hyper_targets(g, hyper_cell, other_cell):
-    """What a hypercube destroys when swapped into `other_cell`."""
-    other = g[other_cell[0]][other_cell[1]]
-    if other.power == HYPER:
-        return {(r, c) for r in range(ROWS) for c in range(COLS) if g[r][c] is not None}
-    kind = other.kind
-    cells = {hyper_cell, other_cell}
-    cells |= {(r, c) for r in range(ROWS) for c in range(COLS)
-              if matchable(g[r][c]) and g[r][c].kind == kind}
-    return detonate(g, cells)
-
-
 def rock_bomb_targets(g, hyper_cell, other_cell):
     """What a rainbow gem destroys when swapped with a rock or bomb.
     
@@ -1224,6 +1213,23 @@ def rock_bomb_targets(g, hyper_cell, other_cell):
     targets.add(other_cell)
     targets.add(hyper_cell)
     return targets
+
+
+def hyper_targets(g, hyper_cell, other_cell):
+    """What a hypercube destroys when swapped into `other_cell`."""
+    other = g[other_cell[0]][other_cell[1]]
+    if other.power == HYPER:
+        return {(r, c) for r in range(ROWS) for c in range(COLS) if g[r][c] is not None}
+    if other.cell_type in (CELL_ROCK, CELL_BOMB):
+        # A rock or bomb has no colour to match on, so fall through to the
+        # clear-them-all rule. resolve_swap already routes here, but this
+        # keeps the function correct on its own.
+        return rock_bomb_targets(g, hyper_cell, other_cell)
+    kind = other.kind
+    cells = {hyper_cell, other_cell}
+    cells |= {(r, c) for r in range(ROWS) for c in range(COLS)
+              if matchable(g[r][c]) and g[r][c].kind == kind}
+    return detonate(g, cells)
 
 
 def find_hint(g):
@@ -2657,7 +2663,10 @@ class Button:
             font = smaller
         return font
 
-    def draw(self, screen, font):
+    def draw(self, screen, font, lift=0.0):
+        """`lift` (0..1) eases the button up a couple of pixels and widens it
+        slightly on hover. It is passed as 0 when smooth animation is off, so
+        the button is drawn exactly where it always was."""
         font = self.fit(font, self.label, self.rect.width - 14)
         if self.down and self.hover:
             fill = BTN_DOWN
@@ -2665,14 +2674,17 @@ class Button:
             fill = BTN_HOVER
         else:
             fill = BTN
-        screen.blit(translucent(self.rect.size, fill, PANEL_EDGE, 10),
-                    self.rect.topleft)
+        rect = self.rect
+        if lift > 0.01:
+            grow = int(round(4 * lift))
+            rect = self.rect.inflate(grow, grow).move(0, -int(round(2 * lift)))
+        screen.blit(translucent(rect.size, fill, PANEL_EDGE, 10), rect.topleft)
         if self.accent:
             pygame.draw.rect(screen, self.accent,
-                             (self.rect.x, self.rect.y + 8, 3, self.rect.height - 16),
+                             (rect.x, rect.y + 8, 3, rect.height - 16),
                              border_radius=2)
         text = font.render(self.label, True, TEXT if self.hover else (206, 212, 228))
-        screen.blit(text, text.get_rect(center=self.rect.center))
+        screen.blit(text, text.get_rect(center=rect.center))
 
 
 class Slider:
@@ -2951,7 +2963,7 @@ class Game:
             screen.blit(img, (box.centerx - img.get_width() // 2, y))
             y += img.get_height() + 12
         for button in self.resume_buttons:
-            button.draw(screen, self.font)
+            button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
 
     def draw_duration_picker(self, screen):
         box = self.duration_picker_rect()
@@ -2960,7 +2972,7 @@ class Game:
         title = self.font_big.render("SELECT DURATION", True, TEXT)
         screen.blit(title, (box.centerx - title.get_width() // 2, box.y + 20))
         for button in self.duration_buttons:
-            button.draw(screen, self.font)
+            button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
 
     @staticmethod
     def settings_rect():
@@ -3036,7 +3048,7 @@ class Game:
             y += CREDIT_LINE
 
         for button in self.credit_buttons:
-            button.draw(screen, self.font)
+            button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
 
     def open_settings(self):
         """Kept as a name; the graphics toggles live in the main menu now."""
@@ -3195,7 +3207,7 @@ class Game:
             # sits clear above the first row of buttons (y=396)
             screen.blit(label, label.get_rect(center=(WIDTH // 2, 362)))
             for button in self.title_buttons:
-                button.draw(screen, self.font)
+                button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
         else:
             pulse = 0.5 + 0.5 * math.sin(self.time * 3.0)
             prompt = self.font_big.render("CLICK TO START", True, TEXT)
@@ -3267,7 +3279,7 @@ class Game:
             if button.label in (ENDLESS.upper(), TIMED.upper()):
                 button.hover = (not zen and
                                 self.extra_clock.upper() == button.label)
-            button.draw(screen, self.font)
+            button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
         if zen:
             lock = self.font_small.render("ZEN IS ALWAYS ENDLESS", True, DIM)
             screen.blit(lock, (box.x + 26, self.extra_buttons[0].rect.y - 18))
@@ -3305,6 +3317,13 @@ class Game:
         self.rainbow_origin = None
         self.rainbow_done = 0
         self.rainbow_step = RAINBOW_STEP
+        self._bg_current = None
+        self._bg_previous = None
+        self._bg_was_title = True
+        self._bg_blend = 1.0
+        self.shown_score = float(getattr(self, "score", 0))
+        self.shown_progress = 0.0
+        self.hover_lift = {}
         self.shake = 0.0
         self.shake_target = 0.0  # smooth ramp towards target
         self.shake_t = 0.0
@@ -3493,6 +3512,48 @@ class Game:
         self.note = text
         self.note_time = 0.0
 
+    def ease_background(self, dt):
+        if self._bg_previous is None:
+            return
+        self._bg_blend += dt / BG_CROSSFADE
+        if self._bg_blend >= 1.0:
+            self._bg_blend = 1.0
+            self._bg_previous = None
+
+    def ease_readouts(self, dt):
+        """Let the score and the level bar catch up to their real values.
+
+        Purely cosmetic: with smooth animation off they simply snap, so the
+        numbers on screen are always the true ones either way.
+        """
+        if not self.bubbly:
+            self.shown_score = float(self.score)
+            self.shown_progress = self.level_progress()
+            self.hover_lift.clear()
+            return
+
+        # a score jump should feel like it is racking up, not ticking forever
+        gap = self.score - self.shown_score
+        if abs(gap) < 1.0:
+            self.shown_score = float(self.score)
+        else:
+            self.shown_score += gap * min(1.0, dt * 7.0) + (1 if gap > 0 else -1)
+
+        target = self.level_progress()
+        step = target - self.shown_progress
+        if abs(step) < 0.002:
+            self.shown_progress = target
+        else:
+            self.shown_progress += step * min(1.0, dt * 6.0)
+
+        for button in (self.buttons + self.menu_buttons + self.title_buttons
+                       + self.extra_buttons + self.over_buttons
+                       + self.music_buttons + self.resume_buttons):
+            key = id(button)
+            want = 1.0 if button.hover else 0.0
+            have = self.hover_lift.get(key, 0.0)
+            self.hover_lift[key] = have + (want - have) * min(1.0, dt * 12.0)
+
     def draw_note(self, screen, x, y, width):
         """Draw note with fade in/out and rainbow color for BOARD WIPE and RAINBOW."""
         if not self.note:
@@ -3501,6 +3562,9 @@ class Game:
         fade_in = min(1.0, self.note_time / 0.3)
         fade_out = max(0.0, 1.0 - (self.note_time - 2.0) / 0.5) if self.note_time > 2.0 else 1.0
         alpha = fade_in * fade_out
+        if self.bubbly:
+            # drifts up a few pixels as it appears, so it does not just blink on
+            y += int(round(10 * (1.0 - ease_out(fade_in))))
         
         # Use rainbow color for "BOARD WIPE!" and "RAINBOW!", normal gold for others
         if "BOARD WIPE" in self.note or "RAINBOW" in self.note:
@@ -4173,6 +4237,14 @@ class Game:
         self.audio.use_playlist(TITLE)
 
     def open_menu(self):
+        # the menu takes over: nothing else stays open behind it
+        self.music_open = False
+        self.bg_picker_open = False
+        self.extras_open = False
+        self.resume_open = False
+        self.credits_open = False
+        self.wipe_open = False
+        self.timed_duration_picker_open = False
         self.menu_open = True
         self.sel = None
         self.dragging = None
@@ -4491,6 +4563,8 @@ class Game:
 
     def update(self, dt):
         self.time += dt
+        self.ease_readouts(dt)
+        self.ease_background(dt)
         # Debris from explosions lives outside the state machine so it always
         # finishes its arc, whatever the board is doing.
         if self.debris:
@@ -5078,11 +5152,20 @@ class Game:
         screen.blit(frame, (int(x), int(y)),
                     special_flags=pygame.BLEND_RGBA_ADD)
 
+    def selection_pulse(self):
+        """A small scale wobble on the gem you have picked up."""
+        if not self.bubbly:
+            return 1.0
+        return 1.0 + 0.045 * math.sin(self.time * 6.5)
+
     def gem_draw_info(self, r, c):
         """Returns (x, y, scale) for the gem at r,c."""
         x = BOARD_X + c * TILE
         y = BOARD_Y + r * TILE
         scale = 1.0
+
+        if self.state == "idle" and self.sel == (r, c):
+            return x, y, self.selection_pulse()
 
         if (self.state == "rainbow" and (r, c) == self.rainbow_origin
                 and self.t < RAINBOW_CHARGE):
@@ -5176,7 +5259,7 @@ class Game:
             zen = self.font_score.render("ZEN", True, GOLD)
             screen.blit(zen, (x, PANEL_Y + 40))
             for button in self.buttons:
-                button.draw(screen, self.font)
+                button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
             self.draw_note(screen, x, PANEL_Y + 208, width)
             track = self.audio.now_playing()
             if track:
@@ -5187,7 +5270,7 @@ class Game:
             return
 
         screen.blit(self.font_small.render("SCORE", True, DIM), (x, PANEL_Y + 26))
-        screen.blit(self.font_score.render(f"{self.score:,}", True, TEXT),
+        screen.blit(self.font_score.render(f"{int(self.shown_score):,}", True, TEXT),
                     (x, PANEL_Y + 48))
 
         if self.timed:
@@ -5212,7 +5295,7 @@ class Game:
         # the clock has its own readout above, so mirroring it here left no
         # indication of how close the next level was.
         self.bar(screen, x, PANEL_Y + (200 if self.timed else 184), width, 10,
-                 self.level_progress(), GOLD)
+                 self.shown_progress, GOLD)
 
         if self.extra("lock"):
             y = PANEL_Y + 250
@@ -5245,7 +5328,7 @@ class Game:
             self.wrapped(screen, track, x, PANEL_Y + PANEL_H - 274, width, DIM)
 
         for button in self.buttons:
-            button.draw(screen, self.font)
+            button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
 
     def wrapped(self, screen, text, x, y, width, color):
         """Panel is narrow, so long notes need to wrap rather than overflow."""
@@ -5346,7 +5429,7 @@ class Game:
             y += image.get_height() + gap
 
         for button in self.over_buttons:
-            button.draw(screen, self.font)
+            button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
 
     def draw_music(self, screen):
         box = self.music_rect()
@@ -5358,7 +5441,7 @@ class Game:
         screen.blit(hint, (box.right - 24 - hint.get_width(), box.y + 30))
         self.music_list.draw(screen, self.font)
         for button in self.music_buttons:
-            button.draw(screen, self.font)
+            button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
 
     def draw_background_picker(self, screen):
         box = self.music_rect()
@@ -5370,7 +5453,7 @@ class Game:
         screen.blit(hint, (box.right - 24 - hint.get_width(), box.y + 30))
         self.bg_list.draw(screen, self.font)
         for button in self.bg_picker_buttons:
-            button.draw(screen, self.font)
+            button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
 
     def draw_menu(self, screen):
 
@@ -5431,7 +5514,7 @@ class Game:
                         (rect.x + 38, rect.y + 5 + name.get_height() + 4))
 
         for button in self.menu_buttons:
-            button.draw(screen, self.font)
+            button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
 
     def draw_levelup(self, screen):
         """Shockwave and banner when the level bar fills."""
@@ -5554,6 +5637,31 @@ class Game:
         art.set_alpha(max(0, min(255, alpha)))
         cx, cy = place(BOARD_X + BOARD_W / 2 + dx, BOARD_Y + BOARD_H / 2)
         surface.blit(art, art.get_rect(center=(int(cx), int(cy))))
+
+    def backdrop_pair(self):
+        """(outgoing, incoming, 0..1) for the background crossfade.
+
+        The photo changes with the level, so this keeps the previous one
+        around and blends across. With smooth animation off it cuts straight
+        to the new one.
+        """
+        photo = self.backdrop_photo()
+        if photo is not self._bg_current:
+            # Only slide between two LEVEL backdrops. Moving to or from the
+            # title screen and the credits has its own artwork, and animating
+            # that reads as a glitch rather than a transition.
+            same_context = not self.on_title and not self._bg_was_title
+            if self.bubbly and self._bg_current is not None and same_context:
+                self._bg_previous = self._bg_current
+                self._bg_blend = 0.0
+            else:
+                self._bg_previous = None
+                self._bg_blend = 1.0
+            self._bg_current = photo
+        self._bg_was_title = self.on_title
+        if self._bg_previous is None:
+            return None, photo, 1.0
+        return self._bg_previous, photo, self._bg_blend
 
     def backdrop_photo(self):
         if not self.settings.get("backgrounds", True) and not self.on_title:
@@ -5755,6 +5863,7 @@ class Display:
         self.fullscreen = False
         self.surface = None
         self.layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        self._cover_cache = {}
         self.scale = 1.0
         self.offset = (0, 0)
         self.set_fullscreen(fullscreen)
@@ -5797,21 +5906,44 @@ class Display:
         return (int((pos[0] - self.offset[0]) / self.scale),
                 int((pos[1] - self.offset[1]) / self.scale))
 
-    def cover(self, photo):
-        """Scale a background to fill the whole display, cropping the excess."""
+    def cover(self, photo, alpha=255, rise=0.0):
+        """Scale a background to fill the whole display, cropping the excess.
+
+        The scaled copy is cached per (photo, size): rescaling a full-size
+        photo every frame was wasteful, and doubly so now two of them are
+        blended during a crossfade.
+        """
+        if alpha <= 0:
+            return
         dw, dh = self.surface.get_size()
-        pw, ph = photo.get_size()
-        f = max(dw / pw, dh / ph)
-        art = pygame.transform.smoothscale(
-            photo, (int(pw * f + 0.5), int(ph * f + 0.5)))
-        self.surface.blit(art, ((dw - art.get_width()) // 2,
-                                (dh - art.get_height()) // 2))
+        key = (id(photo), dw, dh)
+        art = self._cover_cache.get(key)
+        if art is None:
+            pw, ph = photo.get_size()
+            f = max(dw / pw, dh / ph)
+            art = pygame.transform.smoothscale(
+                photo, (int(pw * f + 0.5), int(ph * f + 0.5)))
+            if len(self._cover_cache) > 6:
+                self._cover_cache.clear()
+            self._cover_cache[key] = art
+        pos = ((dw - art.get_width()) // 2,
+               (dh - art.get_height()) // 2 + int(dh * rise))
+        if alpha >= 255:
+            self.surface.blit(art, pos)
+        else:
+            faded = art.copy()
+            faded.set_alpha(alpha)
+            self.surface.blit(faded, pos)
 
     def present(self, game):
         self.surface.fill(BG)
-        photo = game.backdrop_photo()
+        outgoing, photo, blend = game.backdrop_pair()
+        if outgoing is not None and blend < 1.0:
+            # the old one drifts up and out as the new one arrives beneath it
+            self.cover(outgoing, rise=-ease_in_out(blend) * 0.35)
         if photo is not None:
-            self.cover(photo)
+            self.cover(photo, 255 if outgoing is None else int(60 + 195 * blend),
+                       rise=(1.0 - ease_in_out(blend)) * 0.9)
 
         game.draw_wide(self.surface, self.scale, self.offset, under=True)
 
