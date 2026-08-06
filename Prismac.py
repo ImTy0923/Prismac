@@ -65,6 +65,7 @@ import math
 import os
 import random
 import sys
+from pathlib import Path
 
 import pygame
 
@@ -266,6 +267,25 @@ def app_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def get_saves_dir():
+    """Get the Prismac Saves folder in the user's Documents directory.
+    
+    This is cross-platform compatible for Mac and Windows.
+    Creates the directory if it doesn't exist.
+    
+    Returns:
+        str: Path to the Prismac Saves folder
+    """
+    # Get Documents folder (works on Mac, Windows, and Linux)
+    documents = Path.home() / "Documents"
+    
+    # Create Prismac Saves subfolder
+    saves_dir = documents / "Prismac Saves"
+    saves_dir.mkdir(parents=True, exist_ok=True)
+    
+    return str(saves_dir)
+
+
 def bundle_dir():
     """Where PyInstaller unpacked the baked-in copies."""
     return getattr(sys, "_MEIPASS", app_dir())
@@ -291,8 +311,11 @@ UI_DIR = asset_folder("ui")
 CHAOS_DIR = asset_folder("chaos")
 TITLE_DIR = asset_folder("title")
 CREDITS_DIR = asset_folder("credits")
-SAVE_FILE = os.path.join(app_dir(), "prismac_save.json")
-SETTINGS_FILE = os.path.join(app_dir(), "prismac_settings.json")
+
+# Save files now go to Documents/Prismac Saves (cross-platform)
+SAVES_DIR = get_saves_dir()
+SAVE_FILE = os.path.join(SAVES_DIR, "prismac_save.json")
+SETTINGS_FILE = os.path.join(SAVES_DIR, "prismac_settings.json")
 # "smooth animation" off keeps the same timings but drops the springiness
 WIPE_HOLD = 3.0            # seconds YES must be held to erase save data
 SAVED_MODES = (ENDLESS, SHAPES) if False else ("endless", "shapes")
