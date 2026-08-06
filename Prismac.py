@@ -124,6 +124,7 @@ LOCK_SECONDS = 10.0
 SETTING_DEFS = (
     ("fullscreen",  "FULLSCREEN",   "Fills Screen to Aspect Ratio"),
     ("backgrounds", "BACKGROUNDS",  "Show Level Artwork"),
+    ("opaque",      "REDUCE TRANSPARENCY", "Solid Panels And Buttons"),
     ("smooth",      "SMOOTH ANIMATION", "Smooth Gem Animations"),
     ("shake",     "CAMERA SHAKE",        "Screen Shakes on Explosions"),
     ("particles", "BACKGROUND PARTICLES", "Small Particle Effects"),
@@ -197,6 +198,14 @@ CHAOS_ROCK_CHANCE = 0.055
 CHAOS_BOMB_CHANCE = 0.030
 
 BG_CROSSFADE = 2.6         # seconds for the new level backdrop to slide up
+
+# Level backdrops do not composite correctly on macOS: in fullscreen the
+# letterboxed area comes out black while the bars show the photo. Until that
+# is tracked down, backgrounds default to off there and the slide between
+# them is skipped entirely. The toggle is still in the menu, so it can be
+# switched back on to test.
+IS_MACOS = sys.platform == "darwin"
+BACKDROPS_OK = not IS_MACOS
 BOMB_FUSE_MIN = 4
 BOMB_FUSE_MAX = 6
 
@@ -421,6 +430,7 @@ CREDITS_TEXT = (
 
 CREDIT_SPEED = 44          # pixels per second
 CREDIT_GEMS = 20           # gems drifting behind the roll
+DEBRIS_MAX = 22            # flying gems on screen at once from explosions
 CREDIT_LINE = 26
 
 # title screen
@@ -2031,7 +2041,9 @@ def load_backgrounds():
     overflow is cropped, so nothing ends up squashed.
     """
     shots = []
+    failures = []
     if not os.path.isdir(BACKGROUND_DIR):
+        print(f"  backgrounds folder not found at {BACKGROUND_DIR}")
         return shots
     names = []
     for filename in os.listdir(BACKGROUND_DIR):
@@ -2042,16 +2054,24 @@ def load_backgrounds():
         stem = str(key)
         for filename in os.listdir(BACKGROUND_DIR):
             if os.path.splitext(filename)[0] == stem:
+                path = os.path.join(BACKGROUND_DIR, filename)
                 try:
-                    photo = pygame.image.load(
-                        os.path.join(BACKGROUND_DIR, filename))
-                    # convert() is only an optimisation, and its result is
-                    # tied to the current display format - skip it if the
-                    # image has any alpha so nothing is thrown away
+                    photo = pygame.image.load(path)
+                except pygame.error as err:
+                    # Say so. This used to fail silently, which made a
+                    # missing decoder (SDL_image often ships without WEBP on
+                    # macOS) look like a black screen with no explanation.
+                    print(f"  could not read {filename}: {err}")
+                    failures.append(filename)
+                    break
+                try:
+                    # convert() is only an optimisation and its result is tied
+                    # to the current display format; if it fails the raw
+                    # surface still draws perfectly well.
                     photo = (photo.convert_alpha() if photo.get_alpha()
                              else photo.convert())
                 except pygame.error:
-                    break
+                    pass
                 pw, ph = photo.get_size()
                 scale = max(WIDTH / pw, HEIGHT / ph)
                 photo = pygame.transform.smoothscale(
@@ -2064,12 +2084,28 @@ def load_backgrounds():
                 canvas.blit(scrim, (0, 0))
                 shots.append(canvas)
                 break
+    if failures:
+        print(f"  {len(failures)} background(s) could not be decoded. "
+              "If they are .webp, re-save them as .png - SDL_image is often "
+              "built without WEBP support on macOS.")
+    if not shots and names:
+        print(f"  found {len(names)} background file(s) but loaded none.")
     return shots
 
 
-def translucent(size, fill, edge=None, radius=14):
+OPAQUE_UI = False          # set by the "reduce transparency" option
+
+
+def translucent(size, fill, edge=None, radius=14, solid=True):
     """Rounded rect with real alpha. pygame.draw cannot blend alpha straight
-    onto the display, so anything see-through has to be built here first."""
+    onto the display, so anything see-through has to be built here first.
+
+    Every panel, board and button goes through here, so the reduce-
+    transparency option only has to force the alpha up in one place.
+    `solid=False` marks the dimming veils, which must stay see-through.
+    """
+    if OPAQUE_UI and solid and len(fill) == 4 and fill[3] > 0:
+        fill = fill[:3] + (255,)
     surf = pygame.Surface(size, pygame.SRCALPHA)
     pygame.draw.rect(surf, fill, surf.get_rect(), border_radius=radius)
     if edge:
@@ -2814,7 +2850,10 @@ class Game:
         self.extras_note = ""
         # everything on by default except fullscreen, which should not be
         # forced on someone the first time they launch the game
-        self.settings = {k: (k != "fullscreen") for k, _, _ in SETTING_DEFS}
+        self.settings = {k: k not in ("fullscreen", "opaque")
+                         for k, _, _ in SETTING_DEFS}
+        if not BACKDROPS_OK:
+            self.settings["backgrounds"] = False
         self.settings_open = False
         self.display = None
         self.credit_armed = False      # first click arms, second opens
@@ -2931,7 +2970,10 @@ class Game:
                 os.remove(path)
             except OSError:
                 pass
-        self.settings = {k: (k != "fullscreen") for k, _, _ in SETTING_DEFS}
+        self.settings = {k: k not in ("fullscreen", "opaque")
+                         for k, _, _ in SETTING_DEFS}
+        if not BACKDROPS_OK:
+            self.settings["backgrounds"] = False
         if self.display is not None:
             self.settings["fullscreen"] = self.display.fullscreen
         self.wipe_open = False
@@ -3172,6 +3214,17 @@ class Game:
         self.settings_open = False
         self.audio.play("menuclick")
 
+    def apply_opacity(self):
+        """Push the option into the module flag and rebuild what was baked
+        with the old alpha."""
+        global OPAQUE_UI
+        OPAQUE_UI = bool(self.settings.get("opaque", False))
+        self.panel_bg = translucent((PANEL_W, PANEL_H), PANEL_FILL,
+                                    PANEL_EDGE, 18)
+        self.board_bg = self.build_board_backdrop()
+        self.build_widgets()
+        self.build_title_widgets()
+
     def save_settings(self):
         if self.data_wiped:
             return
@@ -3186,6 +3239,7 @@ class Game:
             for key, _, _ in SETTING_DEFS:
                 if isinstance(stored.get(key), bool):
                     self.settings[key] = stored[key]
+        self.apply_opacity()
         if isinstance(data.get("music"), (int, float)):
             self.audio.set_music_volume(float(data["music"]))
         if isinstance(data.get("sfx"), (int, float)):
@@ -3212,11 +3266,14 @@ class Game:
             surface = self.display.toggle_with(self)
             self.settings[key] = bool(surface.get_flags() & pygame.FULLSCREEN)
             self.audio.play("menuclick")
+            self.save_settings()      # this return used to skip the write
             return
         self.settings[key] = not self.settings.get(key, True)
         if key == "shake":
             self.shake = 0.0
             self.shake_target = 0.0
+        if key == "opaque":
+            self.apply_opacity()
         self.audio.play("menuclick")
         self.save_settings()
 
@@ -3574,6 +3631,12 @@ class Game:
         return out
 
     def skinned(self, name, size):
+        # The ui/ skin folder was removed from the project; everything is
+        # drawn rather than blitted from artwork. Kept as a no-op so the
+        # dozens of call sites do not all need touching.
+        return None
+
+    def _unused_skinned(self, name, size):
         """Scaled skin image, or None if that file was not supplied."""
         art = self.skin.get(name)
         return stretch(art, size) if art is not None else None
@@ -3628,6 +3691,10 @@ class Game:
 
     def ease_background(self, dt):
         if self._bg_previous is None:
+            return
+        if not BACKDROPS_OK:
+            self._bg_blend = 1.0
+            self._bg_previous = None
             return
         self._bg_blend += dt / BG_CROSSFADE
         if self._bg_blend >= 1.0:
@@ -3805,15 +3872,21 @@ class Game:
         """Throw the gems an explosion destroyed off the screen.
 
         Only with smooth animation on - flat mode keeps the plain pop.
+        Capped: a rainbow gem swapped into a bomb sets off every bomb on the
+        board, and each of those blasts asked for its own handful of debris,
+        which buried the screen in flying gems.
         """
         if not self.bubbly or not cells:
             return
         if getattr(self, "rainbow_thrown", False):
             self.rainbow_thrown = False
             return          # already thrown one at a time during the zap
+        budget = DEBRIS_MAX - len(self.debris)
+        if budget <= 0:
+            return
         ox = BOARD_X + (origin[1] + 0.5) * TILE
         oy = BOARD_Y + (origin[0] + 0.5) * TILE
-        for r, c in list(cells)[:MAX_EFFECTS]:
+        for r, c in list(cells)[:budget]:
             gem = self.grid[r][c]
             if gem is None or gem.cell_type == CELL_EMPTY:
                 continue
@@ -3997,10 +4070,10 @@ class Game:
         w = PANEL_W - 32
         bottom = PANEL_Y + PANEL_H - 16
         self.buttons = [
-            Button((x, bottom - 46 * 4 - 30, w, 46), "BACKGROUNDS",
-                   self.open_background_picker, accent=(176, 140, 240)),
-            Button((x, bottom - 46 * 3 - 20, w, 46), "HINT",
+            Button((x, bottom - 46 * 4 - 30, w, 46), "HINT",
                    self.show_hint, accent=HINT_COLOR),
+            Button((x, bottom - 46 * 3 - 20, w, 46), "BACKGROUNDS",
+                   self.open_background_picker, accent=(176, 140, 240)),
             Button((x, bottom - 46 * 2 - 10, w, 46), "MUSIC",
                    self.open_music, accent=(150, 160, 190)),
             Button((x, bottom - 46, w, 46), "MENU", self.open_menu),
@@ -4160,7 +4233,7 @@ class Game:
 
     @staticmethod
     def menu_rect():
-        return pygame.Rect(WIDTH // 2 - 230, 48, 460, 640)
+        return pygame.Rect(WIDTH // 2 - 230, 8, 460, 706)
 
     # -- button actions ---------------------------------------------------
 
@@ -5798,7 +5871,8 @@ class Game:
             # title screen and the credits has its own artwork, and animating
             # that reads as a glitch rather than a transition.
             same_context = not self.on_title and not self._bg_was_title
-            if self.bubbly and self._bg_current is not None and same_context:
+            if (BACKDROPS_OK and self.bubbly
+                    and self._bg_current is not None and same_context):
                 self._bg_previous = self._bg_current
                 self._bg_blend = 0.0
             else:
@@ -6011,6 +6085,9 @@ class Display:
         self.surface = None
         self.layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         self._cover_cache = {}
+        self._scaled = None
+        self.scaler = "smooth_dest"
+        self.pick_scaler()
         self.scale = 1.0
         self.offset = (0, 0)
         self.set_fullscreen(fullscreen)
@@ -6030,6 +6107,7 @@ class Display:
             self.surface = pygame.display.set_mode((WIDTH, HEIGHT))
         self.recompute()
         self.layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        self._scaled = None
         if game is not None:
             game.reload_assets()
         return self.surface
@@ -6039,6 +6117,64 @@ class Display:
 
     def toggle(self):
         return self.set_fullscreen(not self.fullscreen)
+
+    def pick_scaler(self):
+        """Work out which scaling call preserves alpha on THIS machine.
+
+        smoothscale silently drops the alpha channel on some SDL builds,
+        which paints the whole 4:3 area solid black over the background.
+        Rather than assume, scale a known-transparent test surface and check
+        the result, falling back to plain scale() - which is nearest
+        neighbour, but always keeps alpha - if smoothscale fails the test.
+        """
+        probe = pygame.Surface((32, 32), pygame.SRCALPHA)
+        probe.fill((0, 0, 0, 0))
+        pygame.draw.rect(probe, (255, 0, 0, 255), (8, 8, 16, 16))
+        size = (64, 64)
+
+        def clear_corner(surface):
+            try:
+                return surface.get_at((1, 1))[3] == 0
+            except IndexError:
+                return False
+
+        # 1. smoothscale into a surface we allocated with SRCALPHA
+        try:
+            dest = pygame.Surface(size, pygame.SRCALPHA)
+            dest.fill((0, 0, 0, 0))
+            pygame.transform.smoothscale(probe, size, dest)
+            if clear_corner(dest):
+                self.scaler = "smooth_dest"
+                return
+        except (TypeError, ValueError, pygame.error):
+            pass
+
+        # 2. plain smoothscale
+        try:
+            if clear_corner(pygame.transform.smoothscale(probe, size)):
+                self.scaler = "smooth"
+                return
+        except pygame.error:
+            pass
+
+        # 3. nearest neighbour. Slightly harder edges when the window is not
+        #    an exact multiple, but the alpha always survives.
+        self.scaler = "nearest"
+        print("  note: smoothscale drops alpha on this build - using "
+              "nearest-neighbour scaling instead.")
+
+    def scale_layer(self, size):
+        if self._scaled is None or self._scaled.get_size() != size:
+            self._scaled = pygame.Surface(size, pygame.SRCALPHA)
+        self._scaled.fill((0, 0, 0, 0))
+        if self.scaler == "smooth_dest":
+            pygame.transform.smoothscale(self.layer, size, self._scaled)
+        elif self.scaler == "smooth":
+            self._scaled.blit(pygame.transform.smoothscale(self.layer, size),
+                              (0, 0))
+        else:
+            self._scaled.blit(pygame.transform.scale(self.layer, size), (0, 0))
+        return self._scaled
 
     def recompute(self):
         dw, dh = self.surface.get_size()
@@ -6085,11 +6221,14 @@ class Display:
     def present(self, game):
         self.surface.fill(BG)
         outgoing, photo, blend = game.backdrop_pair()
-        if outgoing is not None and blend < 1.0:
-            # the old one drifts up and out as the new one arrives beneath it
-            self.cover(outgoing, rise=-ease_in_out(blend) * 0.35)
+        # Always lay the current backdrop down flat first. The sliding copies
+        # are drawn at an offset, which leaves bare screen behind them - and
+        # bare screen is BG, which reads as black.
         if photo is not None:
-            self.cover(photo, 255 if outgoing is None else int(60 + 195 * blend),
+            self.cover(photo)
+        if outgoing is not None and blend < 1.0:
+            self.cover(outgoing, rise=-ease_in_out(blend) * 0.35)
+            self.cover(photo, int(60 + 195 * blend),
                        rise=(1.0 - ease_in_out(blend)) * 0.9)
 
         game.draw_wide(self.surface, self.scale, self.offset, under=True)
@@ -6102,8 +6241,7 @@ class Display:
         else:
             size = (max(1, int(WIDTH * self.scale)),
                     max(1, int(HEIGHT * self.scale)))
-            self.surface.blit(pygame.transform.smoothscale(self.layer, size),
-                              self.offset)
+            self.surface.blit(self.scale_layer(size), self.offset)
 
         game.draw_wide(self.surface, self.scale, self.offset, under=False)
         pygame.display.flip()
@@ -6147,6 +6285,10 @@ def main():
 
     describe_assets()
 
+    if not pygame.image.get_extended():
+        print("WARNING: SDL_image has no extended format support - only BMP "
+              "will load. Backgrounds and gem art will be missing.\n")
+    print("Backgrounds:")
     backgrounds = load_backgrounds()
     if not backgrounds:
         print("No backgrounds found - using a generated one so the "
