@@ -2669,13 +2669,17 @@ def load_credits_art():
     return found
 
 
-def load_backgrounds():
+def load_backgrounds(progress=None):
     """Photos from backgrounds/, scaled to cover the window.
 
     Cover rather than stretch: the image keeps its aspect ratio and the
     overflow is cropped, so nothing ends up squashed.
     Backgrounds are shuffled randomly for each game session.
-    
+
+    `progress` is an optional callable taking a 0..1 fraction. This is the
+    slowest thing that happens at startup, so it reports from inside the loop
+    rather than leaving the loading bar parked for a couple of seconds.
+
     Returns: (surfaces, filenames) - lists of surfaces and their original filenames
     """
     shots = []
@@ -2693,7 +2697,9 @@ def load_backgrounds():
     # Shuffle for random order each session
     random.shuffle(filenames)
     
-    for filename in filenames:
+    for done, filename in enumerate(filenames):
+        if progress:
+            progress(done / len(filenames))
         path = os.path.join(BACKGROUND_DIR, filename)
         try:
             photo = pygame.image.load(path)
@@ -3514,6 +3520,11 @@ class Game:
         self.skin = skin or {}
         self.on_title = True
         self.title_ready = False
+        # While this is set the title screen is fully alive - art, backdrop
+        # and motes - but the CLICK TO START prompt is replaced by a progress
+        # bar, because the modes it would open have not been loaded yet.
+        self.loading = False
+        self.load_progress = 0.0
         self.extras_open = False
         # Campaign: which level is being played, which area the picker is
         # showing, and how far the player has got. campaign_unlocked is the
@@ -4319,6 +4330,8 @@ class Game:
 
         if self.campaign_open:
             pass
+        elif self.loading:
+            self.draw_load_bar(screen, S(470))
         elif self.title_ready:
             label = self.font_big.render("CHOOSE A MODE", True, (255,255,255))
             # sits clear above the first row of buttons
@@ -4367,6 +4380,32 @@ class Game:
                                             GOLD if self.credit_armed else DIM)
             screen.blit(credit, (WIDTH - S(20) - credit.get_width(),
                                  HEIGHT - S(20) - credit.get_height()))
+
+    def draw_load_bar(self, screen, y):
+        """The startup progress bar, sitting exactly where CLICK TO START does.
+
+        Deliberately says nothing about which asset is loading - just a bar
+        and a percentage. Everything is measured through S() so it keeps its
+        proportions at any render scale.
+        """
+        done = clamp01(self.load_progress)
+        bar_w, bar_h = S(400), S(14)
+        bar_x = (WIDTH - bar_w) // 2
+        bar_y = y - bar_h // 2
+        radius = bar_h // 2
+
+        screen.blit(translucent((bar_w, bar_h), (10, 13, 26, 200),
+                                (150, 172, 240, 120), radius, solid=False),
+                    (bar_x, bar_y))
+        fill_w = int(bar_w * done)
+        if fill_w >= 2:
+            # Clamp the fill's own radius, or a nearly-empty bar renders as a
+            # squashed blob rather than a small pill.
+            screen.blit(translucent((fill_w, bar_h), GOLD + (255,), None,
+                                    min(radius, fill_w // 2)), (bar_x, bar_y))
+
+        pct = self.font.render(f"{int(done * 100)}%", True, TEXT)
+        screen.blit(pct, pct.get_rect(center=(WIDTH // 2, bar_y + bar_h + S(24))))
 
     @staticmethod
     def space_banner_rect():
@@ -8320,6 +8359,126 @@ class Display:
 
 
 
+# How long the bar is allowed to spend gliding to a new value, in seconds.
+# The work between steps is not evenly sized, so without this the bar teleports
+# in a few big jumps. Set to 0.0 to make it snap and shave ~1s off startup.
+LOADING_EASE = 0.10
+
+# Relative cost of each step loaded *behind the title screen*. These are
+# eyeballed proportions, not measurements - what matters is that backgrounds
+# (dozens of full-screen photo decodes and rescales) does not share the bar
+# equally with, say, the UI skin.
+LOADING_STEPS = [
+    ("audio",      20),
+    ("effects",    16),
+    ("backgrounds", 48),
+    ("skin",        6),
+    ("save",       10),
+]
+
+
+class Loader:
+    """Runs the progress bar on the live title screen.
+
+    The title art, backdrop and drifting motes are already up before this
+    starts, so what the player sees is the real title screen with a bar
+    standing in for CLICK TO START - not a separate splash that then gets
+    thrown away. Each draw ticks the game forward, so the motes keep drifting
+    and the logo keeps bobbing while assets load.
+
+    Steps are weighted (see LOADING_STEPS) so the bar tracks real work rather
+    than counting steps, and `partial` lets a long step report from inside.
+    """
+
+    def __init__(self, display, game, steps=LOADING_STEPS):
+        self.display = display
+        self.game = game
+        total = sum(weight for _, weight in steps) or 1
+        # name -> (fraction at start of step, fraction at end)
+        self.span = {}
+        run = 0
+        for name, weight in steps:
+            start = run
+            run += weight
+            self.span[name] = (start / total, run / total)
+
+        self.target = 0.0       # where the bar is headed, 0..1
+        self.shown = 0.0        # where the bar actually is, 0..1
+        self.clock = pygame.time.Clock()
+        self._last_draw = 0.0
+        game.loading = True
+        game.load_progress = 0.0
+        self.clock.tick()
+        self.draw()
+
+    # ---- progress reporting -------------------------------------------
+    def step(self, name):
+        """Mark a whole step finished and glide the bar up to it."""
+        self.target = max(self.target, self.span[name][1])
+        self._glide()
+
+    def partial(self, name, fraction):
+        """Report progress from *inside* a step, e.g. 30 backgrounds of 80.
+
+        No gliding here - the value is already moving smoothly on its own,
+        and this gets called in a tight loop.
+        """
+        start, end = self.span[name]
+        self.target = max(self.target,
+                          start + (end - start) * clamp01(fraction))
+        # Redrawing per file would cap loading speed at the refresh rate for
+        # no visual gain, so only repaint if a frame's worth of time has gone.
+        now = pygame.time.get_ticks() / 1000.0
+        if now - self._last_draw >= 1.0 / FPS:
+            self.shown = self.target
+            self.draw()
+
+    def finish(self):
+        """Run the bar out to 100%, hold a beat, then hand over to the game.
+
+        Clearing `loading` is what swaps the bar for CLICK TO START, so the
+        very next frame the title screen is live and clickable.
+        """
+        self.target = 1.0
+        self._glide()
+        pygame.time.wait(140)
+        self.game.loading = False
+        self.game.load_progress = 1.0
+
+    # ---- painting ------------------------------------------------------
+    def _glide(self):
+        """Ease `shown` up to `target`, drawing a frame each tick."""
+        if LOADING_EASE <= 0:
+            self.shown = self.target
+            self.draw()
+            return
+        spent = 0.0
+        while self.shown < self.target - 0.001 and spent < LOADING_EASE:
+            blend = clamp01(spent / LOADING_EASE)
+            self.shown += (self.target - self.shown) * (0.25 + 0.5 * blend)
+            spent += self.draw()
+        self.shown = self.target
+        self.draw()
+
+    def draw(self):
+        """One frame of the real title screen. Returns the delta in seconds."""
+        self._last_draw = pygame.time.get_ticks() / 1000.0
+        # A window that never pumps its queue is a window the OS marks as
+        # hung - on macOS that means a spinning beachball over the title.
+        # Draining here also means clicks are dropped rather than dispatched,
+        # so the title cannot be dismissed before the modes behind it exist.
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+
+        self.game.load_progress = clamp01(self.shown)
+        dt = min(self.clock.tick(FPS) / 1000.0, 0.05)
+        self.game.update(dt)
+        self.display.present(self.game)
+        return dt
+
+
 def main():
     # This line has to come BEFORE pygame.init(). The default mixer buffer is
     # 4096 samples, which puts a very audible delay between clicking a gem and
@@ -8327,10 +8486,27 @@ def main():
     pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=512)
     pygame.init()
     pygame.display.set_caption("Prismac")
-    display = Display(fullscreen=False)
-    screen = display.surface
+
+    # ---- display mode first -------------------------------------------
+    # Read the two settings that decide the size and format of every surface
+    # we are about to build, and open the window at those values straight
+    # away. Building at one size and switching afterwards meant rebuilding
+    # the lot - including a second full pass over backgrounds/ - and on macOS
+    # a surface converted for the previous display format comes back black.
+    prefs = read_settings().get("settings")
+    prefs = prefs if isinstance(prefs, dict) else {}
+    want_fullscreen = prefs.get("fullscreen") is True
+    want_scale = prefs.get("render_scale")
+    if (want_fullscreen and isinstance(want_scale, (int, float))
+            and any(abs(want_scale - f) < 0.01 for f, _ in SCALE_OPTIONS)):
+        apply_render_scale(float(want_scale))
+    display = Display(fullscreen=want_fullscreen)
     clock = pygame.time.Clock()
 
+    # ---- phase 1: just enough to put the title on screen ---------------
+    # Only the gems and the Game object itself, which builds the logo, the
+    # title backdrop and the motes. Everything else waits until the player
+    # can see something.
     names = discover_gems()
     print(f"{len(names)} gems: " + ", ".join(names))
     sprites = build_sprites()
@@ -8340,8 +8516,25 @@ def main():
         print(f"Expected the PNGs in: {ASSET_DIR}")
         print("Playing with plain shapes for those in the meantime.\n")
 
+    game = Game(sprites)
+    game.display = display
+    game.settings["fullscreen"] = display.fullscreen
+    if display.fullscreen:
+        game.settings["render_scale"] = RENDER_SCALE
+    if game.title_bg is None:
+        # No purpose-made title backdrop, and backgrounds/ has not been read
+        # yet. Without this the title sits on flat BG for the whole load and
+        # then snaps to a photo the moment it finishes. A generated one is
+        # cheap and, unlike backgrounds[0], does not change under us.
+        game.title_bg = fallback_background()
+
+    # ---- phase 2: the rest, behind a live title screen -----------------
+    loader = Loader(display, game)
+
     audio = Audio()
     audio.report()
+    game.audio = audio
+    loader.step("audio")
 
     effects, effect_report = build_effects()
     for label, name in (("smoke", SMOKE_ASSET),):
@@ -8355,6 +8548,8 @@ def main():
         print()
     elif os.path.isdir(EFFECT_DIR):
         print(f"No animations found in {EFFECT_DIR}\n")
+    game.anims = effects
+    loader.step("effects")
 
     describe_assets()
 
@@ -8362,7 +8557,8 @@ def main():
         print("WARNING: SDL_image has no extended format support - only BMP "
               "will load. Backgrounds and gem art will be missing.\n")
     print("Backgrounds:")
-    backgrounds, bg_names = load_backgrounds()
+    backgrounds, bg_names = load_backgrounds(
+        lambda fraction: loader.partial("backgrounds", fraction))
     if not backgrounds:
         print("No backgrounds found - using a generated one so the "
               "translucent UI still reads.\n")
@@ -8372,25 +8568,33 @@ def main():
         print(f"{len(backgrounds)} backgrounds loaded, one per level\n")
     elif os.path.isdir(BACKGROUND_DIR):
         print(f"No images found in {BACKGROUND_DIR}\n")
+    game.backgrounds = backgrounds
+    game.background_names = bg_names
+    loader.step("backgrounds")
 
     skin = load_ui_skin()
     if skin:
         print("UI skin: " + ", ".join(sorted(skin)) + "\n")
     elif os.path.isdir(UI_DIR):
         print(f"No skin images found in {UI_DIR}\n")
+    if skin:
+        # The widgets were built against an empty skin, so they have to be
+        # remade now that there is artwork for them to wear.
+        game.skin = skin
+        game.board_bg = game.build_board_backdrop()
+        game.build_widgets()
+        game.build_title_widgets()
+        game.build_campaign_widgets()
+    loader.step("skin")
 
-    game = Game(sprites, audio, effects, backgrounds, skin, bg_names)
-    game.display = display
+    # Volumes live in the settings file, so this has to come after the real
+    # Audio replaced the silent placeholder.
     game.load_settings()
     game.load_campaign()
-    if game.settings.get("fullscreen") and not display.fullscreen:
-        display.set_fullscreen(True, game)
     game.settings["fullscreen"] = display.fullscreen
-    # The saved render scale can only be applied once we know we are actually
-    # fullscreen, since windowed mode always renders 1:1.
-    saved = game.settings.get("render_scale", DEFAULT_RENDER_SCALE)
-    if display.fullscreen and abs(saved - RENDER_SCALE) > 0.01:
-        game.apply_scale(saved)
+    loader.step("save")
+
+    loader.finish()
 
     while True:
         dt = min(clock.tick(FPS) / 1000.0, 0.05)
