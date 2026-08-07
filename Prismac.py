@@ -171,7 +171,11 @@ FPS = 60
 
 # progression
 LEVEL_BASE_TARGET = 1200   # points needed to clear level 1
-LEVEL_GROWTH = 1.35        # each level needs this much more than the last
+# Each level needs this much more than the last. It compounds, so the value
+# matters enormously at depth: at 1.35 level 100 needed 3.7e16 points - about
+# 25 million years of play - which made the "reach level 100" star unearnable.
+# 1.0435 puts level 100 at roughly fifteen hours instead.
+LEVEL_GROWTH = 1.0435
 
 # timed mode
 ENDLESS, TIMED, TITLE = "endless", "timed", "title"
@@ -187,9 +191,22 @@ CAMPAIGN_MUSIC_MODE = "campaignmusic"   # the current area's own tracks
 CAMPAIGN_AREAS = (
     "Beach", "Dock", "City", "Forest", "Mine",
     "Cave", "Crystal Cavern", "Volcanic Core", "Underground City", "The Deep",
+    "Space",
 )
 LEVELS_PER_AREA = 5
-CAMPAIGN_LEVELS = len(CAMPAIGN_AREAS) * LEVELS_PER_AREA
+# Space is the reward for finishing the run: twice the levels, and brutal.
+SPACE_AREA = len(CAMPAIGN_AREAS) - 1
+SPACE_LEVELS = 10
+AREA_LEVEL_COUNTS = (LEVELS_PER_AREA,) * SPACE_AREA + (SPACE_LEVELS,)
+# First level number of each area, so numbering stays continuous.
+AREA_FIRST_LEVEL = []
+_running = 1
+for _count in AREA_LEVEL_COUNTS:
+    AREA_FIRST_LEVEL.append(_running)
+    _running += _count
+AREA_FIRST_LEVEL = tuple(AREA_FIRST_LEVEL)
+CAMPAIGN_LEVELS = _running - 1              # 60
+MAIN_CAMPAIGN_LEVELS = AREA_FIRST_LEVEL[SPACE_AREA] - 1   # 50, before Space
 
 # Objective kinds. Each is a small, legible challenge:
 #   score - reach a score inside a move budget
@@ -202,6 +219,51 @@ GOAL_SCORE, GOAL_GEMS, GOAL_TIME = "score", "gems", "time"
 # scoring off, which would make every objective impossible.
 CAMPAIGN_MODIFIERS = ("mono", "boom", "lock", "spotlight", "chaos")
 
+# What each modifier does to how fast you can score, measured by playing the
+# real game with a bot. COLOR LOCK is the big one: only one colour pays, so
+# it cuts scoring to roughly a quarter. EXPLOSIVES pays MORE than a clean
+# board. Targets are multiplied by these, otherwise a level asks the same
+# points per move whether or not it has crippled you.
+# SPOTLIGHT measured at 1.00 because a bot reads the grid directly and cannot
+# be blinded; the discount here is a judgement call for a human who can only
+# see the lit circle.
+MODIFIER_SCORE_FACTOR = {
+    "mono": 1.00,
+    "boom": 1.45,
+    "lock": 0.22,
+    "spotlight": 0.80,
+    "chaos": 0.70,
+}
+# Clearing gems is barely affected by which colour scores, so the gem
+# objectives only discount for the modifiers that disrupt the board itself.
+MODIFIER_GEM_FACTOR = {"chaos": 0.80, "spotlight": 0.85}
+
+# Every match pays more the deeper you get, so later areas feel like you are
+# getting stronger rather than merely being asked for bigger numbers. The
+# objectives below are priced BEFORE this bonus, which is what makes the back
+# half of the run more forgiving than the front.
+CAMPAIGN_SCORE_BONUS = 0.14        # per area, compounding on the base score
+
+# Three achievement stars, shown under the logo. Earnable in any order.
+# (key, title shown when it is won, how it is earned)
+STAR_DEFS = (
+    ("endless100", "ENDLESS MASTER", "REACHED LEVEL 100 IN ENDLESS"),
+    ("deep",       "INTO THE DEEP",  "BEAT THE DEEP"),
+    ("space",      "SPACEFARER",     "BEAT SPACE"),
+)
+ENDLESS_STAR_LEVEL = 100
+
+
+def campaign_score_multiplier(area):
+    return 1.0 + CAMPAIGN_SCORE_BONUS * max(0, area)
+
+
+def modifier_factor(mods, table):
+    factor = 1.0
+    for key in mods:
+        factor *= table.get(key, 1.0)
+    return factor
+
 
 def campaign_modifiers(area, step):
     """Which Extras modifiers a level runs with.
@@ -211,6 +273,12 @@ def campaign_modifiers(area, step):
     Volcanic Core, and The Deep finishes on three at once. Which modifiers
     appear rotates with the area so the run keeps changing shape.
     """
+    if area == SPACE_AREA:
+        # Never fewer than two, up to four by the end.
+        slots = 2 + (step >= 3) + (step >= 7)
+        return tuple(dict.fromkeys(
+            CAMPAIGN_MODIFIERS[(step + i * 3) % len(CAMPAIGN_MODIFIERS)]
+            for i in range(slots)))
     if area < 2:
         return ()
     slots = 1 + (area >= 7) + (area >= 9)
@@ -232,43 +300,114 @@ def campaign_level(number):
     and the three goal kinds rotate so no area is five of the same task.
     """
     number = max(1, min(CAMPAIGN_LEVELS, int(number)))
-    area = (number - 1) // LEVELS_PER_AREA          # 0..9
-    step = (number - 1) % LEVELS_PER_AREA           # 0..4
-    kind = (GOAL_SCORE, GOAL_GEMS, GOAL_SCORE, GOAL_TIME, GOAL_SCORE)[step]
+    area = campaign_area_of(number)
+    step = number - AREA_FIRST_LEVEL[area]
+    kind = (GOAL_SCORE, GOAL_GEMS, GOAL_SCORE, GOAL_TIME,
+            GOAL_SCORE, GOAL_TIME, GOAL_GEMS, GOAL_SCORE,
+            GOAL_TIME, GOAL_SCORE)[step % 10]
 
-    # Area sets the scale, step raises it within the area.
-    ramp = 1.0 + area * 0.55 + step * 0.16
     mods = campaign_modifiers(area, step)
 
+    if area == SPACE_AREA:
+        # The post-campaign area. Defined by how much it demands per move or
+        # per second rather than by a multiplier, because the ramp used for
+        # the main run overshoots into the impossible this far out - it was
+        # asking for twelve gems a move.
+        #
+        # The Deep finishes at roughly 270 points a move; Space opens just
+        # above that and climbs to about double.
+        # Space picks up where The Deep leaves off (about 150 points a move)
+        # and climbs by half again. Every level here carries modifiers, so the
+        # same discount applies - without it these were asking several times
+        # what the game can actually produce.
+        if kind == GOAL_GEMS:
+            budget = 24 - step // 2
+            per = (3.2 + step * 0.06) * modifier_factor(mods,
+                                                        MODIFIER_GEM_FACTOR)
+            target = int(round(budget * per / 2.0) * 2)
+            return {"kind": kind, "target": target, "moves": budget,
+                    "extras": mods,
+                    "text": f"CLEAR {target} GEMS IN {budget} MOVES"}
+        per_move = (140 + step * 8) * modifier_factor(mods,
+                                                      MODIFIER_SCORE_FACTOR)
+        if kind == GOAL_TIME:
+            seconds = 60 - step
+            target = int(round(seconds / 2.5 * per_move / 50.0) * 50)
+            return {"kind": kind, "target": target, "seconds": float(seconds),
+                    "extras": mods,
+                    "text": f"SCORE {target:,} IN {seconds}S"}
+        budget = 22 - step // 3
+        target = int(round(budget * per_move / 50.0) * 50)
+        return {"kind": kind, "target": target, "moves": budget,
+                "extras": mods,
+                "text": f"SCORE {target:,} IN {budget} MOVES"}
+
+    # Difficulty is stated as how much a level demands per move, then turned
+    # into a target - the same way Space is defined. Setting a target and
+    # squeezing the move budget separately is what produced the old spikes:
+    # the last level of an area asked well over twice its opener, on top of
+    # carrying the area's modifiers.
+    # A bot making random legal moves scores about 100 points and clears
+    # about 5.7 gems per move on a clean board. The curve is pitched against
+    # that: the opening levels sit well under it, and the last of the fifty
+    # asks about half as much again, which is where skill has to make up the
+    # difference.
+    per_move = 34 + area * 11 + step * 4
+
     if kind == GOAL_GEMS:
-        target = int(round((26 + area * 7 + step * 4) / 2.0) * 2)
-        budget = max(6, 22 + area - step * 2)
+        budget = 22 + area - step
+        per = 1.6 + area * 0.16 + step * 0.05      # gems cleared per move
+        per *= modifier_factor(mods, MODIFIER_GEM_FACTOR)
+        target = int(round(budget * per / 2.0) * 2)
         return {"kind": kind, "target": target, "moves": budget,
                 "extras": mods,
                 "text": f"CLEAR {target} GEMS IN {budget} MOVES"}
     if kind == GOAL_TIME:
-        target = int(round(900 * ramp / 50.0) * 50)
-        seconds = max(30, 75 - area * 3)
+        seconds = max(40, 75 - area * 2)
+        # A considered move takes roughly two and a half seconds, so the
+        # clock is converted into moves before pricing it.
+        target = int(round(seconds / 2.5 * per_move
+                           * modifier_factor(mods, MODIFIER_SCORE_FACTOR)
+                           / 50.0) * 50)
         return {"kind": kind, "target": target, "seconds": float(seconds),
                 "extras": mods,
                 "text": f"SCORE {target:,} IN {seconds}S"}
-    target = int(round(700 * ramp / 50.0) * 50)
-    budget = max(5, 20 + area - step * 3)
+    budget = 20 + area - step
+    target = int(round(budget * per_move
+                       * modifier_factor(mods, MODIFIER_SCORE_FACTOR)
+                       / 50.0) * 50)
     return {"kind": kind, "target": target, "moves": budget,
             "extras": mods,
             "text": f"SCORE {target:,} IN {budget} MOVES"}
 
 
-def campaign_modifier_label(goal):
+# Short names for the level picker, where a row can carry four modifiers and
+# the full names ("COLOR LOCK + MONO + SPOTLIGHT + EXPLOSIVES") do not fit at
+# a readable size.
+MODIFIER_SHORT = {"mono": "MONO", "boom": "BOMBS", "lock": "LOCK",
+                  "spotlight": "SPOT", "chaos": "CHAOS"}
+
+
+def campaign_modifier_label(goal, short=False):
     """'MONO + COLOR LOCK' for a level's modifiers, or '' if it has none."""
-    names = {k: label for k, label, _ in EXTRA_DEFS}
     mods = (goal or {}).get("extras", ())
+    if short:
+        return " ".join(MODIFIER_SHORT.get(k, k.upper()) for k in mods)
+    names = {k: label for k, label, _ in EXTRA_DEFS}
     return " + ".join(names.get(k, k.upper()) for k in mods)
 
 
 def campaign_area_of(number):
-    return max(0, min(len(CAMPAIGN_AREAS) - 1,
-                      (int(number) - 1) // LEVELS_PER_AREA))
+    """Which area a continuous level number falls in."""
+    number = max(1, min(CAMPAIGN_LEVELS, int(number)))
+    for area in range(len(CAMPAIGN_AREAS) - 1, -1, -1):
+        if number >= AREA_FIRST_LEVEL[area]:
+            return area
+    return 0
+
+
+def area_level_count(area):
+    return AREA_LEVEL_COUNTS[max(0, min(len(AREA_LEVEL_COUNTS) - 1, area))]
 
 # Extras: modifiers the player can stack. Each is (key, label, blurb).
 EXTRA_DEFS = (
@@ -280,8 +419,6 @@ EXTRA_DEFS = (
     ("chaos",   "CHAOS",          "???"),
 )
 LOCK_SECONDS = 10.0
-# Panel buttons a campaign level takes over, since the area picks both.
-LOCKED_IN_CAMPAIGN = ("BACKGROUNDS", "MUSIC")
 # Row height in the level picker. campaign_rect() and
 # build_campaign_widgets() both derive from this, so it can only be
 # changed in one place.
@@ -1805,6 +1942,30 @@ def load_animation(name, size):
     return None, None, None
 
 
+def load_star_art():
+    """Star.png from ui/, for the achievement row under the logo. Absent art
+    falls back to a drawn star, so the row still reads."""
+    if not os.path.isdir(UI_DIR):
+        return None
+    for filename in sorted(os.listdir(UI_DIR)):
+        stem, ext = os.path.splitext(filename)
+        if _norm(stem) != "star" or ext.lower() not in (".png", ".webp"):
+            continue
+        try:
+            art = pygame.image.load(os.path.join(UI_DIR, filename))
+        except pygame.error as err:
+            print(f"  could not read {filename}: {err}")
+            return None
+        try:
+            # convert_alpha() needs a video mode; it is only an optimisation,
+            # and the raw surface draws fine without it.
+            art = art.convert_alpha()
+        except pygame.error:
+            pass
+        return art
+    return None
+
+
 def load_ui_skin():
     """Artwork from ui/. Anything absent just falls back to drawn shapes."""
     skin = {}
@@ -2069,17 +2230,24 @@ def campaign_area_dir(area):
 
 def load_campaign_background(area):
     """The backdrop from that area's folder, scaled to cover the layer."""
+    name = CAMPAIGN_AREAS[max(0, min(len(CAMPAIGN_AREAS) - 1, area))]
     folder = campaign_area_dir(area)
     if folder is None:
+        print(f"  campaign: no folder for {name} in {CAMPAIGN_DIR}")
         return None
+    found = False
     for filename in sorted(os.listdir(folder)):
         if os.path.splitext(filename)[1].lower() not in (".png", ".webp",
                                                          ".jpg", ".jpeg"):
             continue
+        found = True
         try:
             art = pygame.image.load(os.path.join(folder, filename))
             art = art.convert_alpha() if art.get_alpha() else art.convert()
-        except pygame.error:
+        except pygame.error as err:
+            # Silently skipping this is how an area ended up with no backdrop
+            # and no explanation. SDL_image often ships without WEBP on macOS.
+            print(f"  campaign: could not read {name}/{filename}: {err}")
             continue
         w, h = art.get_size()
         scale = max(WIDTH / w, HEIGHT / h)        # cover, never squashed
@@ -2089,6 +2257,9 @@ def load_campaign_background(area):
         canvas.blit(art, ((WIDTH - art.get_width()) // 2,
                           (HEIGHT - art.get_height()) // 2))
         return canvas
+    if not found:
+        print(f"  campaign: no image in {name}/ - that area will have a "
+              "plain backdrop")
     return None
 
 
@@ -2281,45 +2452,46 @@ def load_backgrounds():
     if not os.path.isdir(BACKGROUND_DIR):
         print(f"  backgrounds folder not found at {BACKGROUND_DIR}")
         return shots
+    # Sort by a lower-cased key but carry the REAL filename along. Rebuilding
+    # the name from the sort key and looking it up again meant anything with
+    # a capital letter never matched itself and was dropped without a word -
+    # so "1.png" loaded and "Sunset.png" silently did not.
     names = []
     for filename in os.listdir(BACKGROUND_DIR):
         stem, ext = os.path.splitext(filename)
         if ext.lower() in (".png", ".jpg", ".jpeg", ".webp"):
-            names.append((0, int(stem)) if stem.isdigit() else (1, stem.lower()))
-    for _, key in sorted(names):
-        stem = str(key)
-        for filename in os.listdir(BACKGROUND_DIR):
-            if os.path.splitext(filename)[0] == stem:
-                path = os.path.join(BACKGROUND_DIR, filename)
-                try:
-                    photo = pygame.image.load(path)
-                except pygame.error as err:
-                    # Say so. This used to fail silently, which made a
-                    # missing decoder (SDL_image often ships without WEBP on
-                    # macOS) look like a black screen with no explanation.
-                    print(f"  could not read {filename}: {err}")
-                    failures.append(filename)
-                    break
-                try:
-                    # convert() is only an optimisation and its result is tied
-                    # to the current display format; if it fails the raw
-                    # surface still draws perfectly well.
-                    photo = (photo.convert_alpha() if photo.get_alpha()
-                             else photo.convert())
-                except pygame.error:
-                    pass
-                pw, ph = photo.get_size()
-                scale = max(WIDTH / pw, HEIGHT / ph)
-                photo = pygame.transform.smoothscale(
-                    photo, (int(pw * scale + 0.5), int(ph * scale + 0.5)))
-                canvas = pygame.Surface((WIDTH, HEIGHT))
-                canvas.blit(photo, ((WIDTH - photo.get_width()) // 2,
-                                    (HEIGHT - photo.get_height()) // 2))
-                scrim = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-                scrim.fill((0, 0, 0, BG_DIM))   # keeps the gems readable
-                canvas.blit(scrim, (0, 0))
-                shots.append(canvas)
-                break
+            key = (0, int(stem), "") if stem.isdigit() else (1, 0, stem.lower())
+            names.append((key, filename))
+    for _, filename in sorted(names):
+        path = os.path.join(BACKGROUND_DIR, filename)
+        try:
+            photo = pygame.image.load(path)
+        except pygame.error as err:
+            # Say so. This used to fail silently, which made a missing
+            # decoder (SDL_image often ships without WEBP on macOS) look
+            # like a black screen with no explanation.
+            print(f"  could not read {filename}: {err}")
+            failures.append(filename)
+            continue
+        try:
+            # convert() is only an optimisation and its result is tied to
+            # the current display format; if it fails the raw surface still
+            # draws perfectly well.
+            photo = (photo.convert_alpha() if photo.get_alpha()
+                     else photo.convert())
+        except pygame.error:
+            pass
+        pw, ph = photo.get_size()
+        scale = max(WIDTH / pw, HEIGHT / ph)
+        photo = pygame.transform.smoothscale(
+            photo, (int(pw * scale + 0.5), int(ph * scale + 0.5)))
+        canvas = pygame.Surface((WIDTH, HEIGHT))
+        canvas.blit(photo, ((WIDTH - photo.get_width()) // 2,
+                            (HEIGHT - photo.get_height()) // 2))
+        scrim = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        scrim.fill((0, 0, 0, BG_DIM))   # keeps the gems readable
+        canvas.blit(scrim, (0, 0))
+        shots.append(canvas)
     if failures:
         print(f"  {len(failures)} background(s) could not be decoded. "
               "If they are .webp, re-save them as .png - SDL_image is often "
@@ -3114,7 +3286,14 @@ class Game:
         self.campaign_unlocked = 1
         self.campaign_open = False
         self.campaign_bg = None
+        self.stars = set()             # achievement keys already earned
+        self.star_banner = None        # the star being announced, if any
+        self.star_buttons = []
+        self.star_art = load_star_art()
+        self.campaign_finale = False   # credits rolling as the campaign end
+        self.space_banner = False      # 'new area' notice is showing
         self.campaign_arrows = []
+        self.campaign_panel = []
         self.campaign_rows = []
         self.campaign_buttons = []
         self.extras = {k: False for k, _, _ in EXTRA_DEFS}
@@ -3246,15 +3425,27 @@ class Game:
 
     # -- campaign picker ---------------------------------------------------
 
-    @staticmethod
-    def campaign_rect():
-        # Height is derived from what actually goes inside - header, area
-        # name, five rows and the BACK button - rather than guessed, which is
-        # how the last row ended up under the button.
-        rows = (LEVELS_PER_AREA * (S(CAMPAIGN_ROW_H) + S(CAMPAIGN_ROW_GAP))
+    def campaign_grid(self):
+        """(columns, rows per column, column width) for the shown area.
+
+        Space has ten levels, and ten stacked rows do not fit the layer at
+        any scale, so anything past five splits into a second column.
+        """
+        count = area_level_count(self.campaign_area)
+        cols = 1 if count <= LEVELS_PER_AREA else 2
+        per_col = -(-count // cols)              # ceil
+        colw = S(464) if cols == 1 else S(400)
+        return cols, per_col, colw
+
+    def campaign_rect(self):
+        # Derived from what actually goes inside - header, area name, the
+        # level rows and the BACK button - rather than guessed, which is how
+        # the last row once ended up under the button.
+        cols, per_col, colw = self.campaign_grid()
+        rows = (per_col * (S(CAMPAIGN_ROW_H) + S(CAMPAIGN_ROW_GAP))
                 - S(CAMPAIGN_ROW_GAP))
         height = S(146) + rows + S(18) + S(46) + S(18)
-        width = S(560)
+        width = S(96) + cols * colw + (cols - 1) * S(14)
         return pygame.Rect(WIDTH // 2 - width // 2, HEIGHT // 2 - height // 2,
                            width, height)
 
@@ -3269,16 +3460,30 @@ class Game:
                    lambda: self.step_area(1), accent=(96, 200, 232)),
         ]
         self.campaign_rows = []
-        rw = box.width - S(96)
+        cols, per_col, colw = self.campaign_grid()
         rh = S(CAMPAIGN_ROW_H)
-        for i in range(LEVELS_PER_AREA):
+        for i in range(area_level_count(self.campaign_area)):
+            col, row = divmod(i, per_col)
             self.campaign_rows.append(
-                pygame.Rect(box.x + S(48),
-                            box.y + S(146) + i * (rh + S(CAMPAIGN_ROW_GAP)),
-                            rw, rh))
+                pygame.Rect(box.x + S(48) + col * (colw + S(14)),
+                            box.y + S(146) + row * (rh + S(CAMPAIGN_ROW_GAP)),
+                            colw, rh))
         self.campaign_buttons = [
             Button((box.x + S(48), box.bottom - S(18) - S(46),
                     box.width - S(96), S(46)), "BACK", self.close_campaign),
+        ]
+
+        sbox = self.space_banner_rect()
+        self.space_buttons = [
+            Button((sbox.centerx - S(110), sbox.bottom - S(64), S(220), S(46)),
+                   "VISIT SPACE", self.close_space_banner,
+                   accent=(96, 200, 232)),
+        ]
+
+        stbox = self.star_banner_rect()
+        self.star_buttons = [
+            Button((stbox.centerx - S(90), stbox.bottom - S(60), S(180), S(44)),
+                   "NICE", self.close_star_banner, accent=GOLD),
         ]
 
     def open_campaign(self):
@@ -3296,12 +3501,22 @@ class Game:
         self.audio.play("menuclick")
 
     def step_area(self, delta):
-        """Left/right through the ten areas. Stops at the ends rather than
-        wrapping, so the order reads as a journey."""
+        """Left/right through the areas. Stops at either end rather than
+        wrapping, so the order reads as a journey, and will not run past the
+        furthest area reached - the next one opens only when all five levels
+        of this one are cleared."""
         target = self.campaign_area + delta
-        if not 0 <= target < len(CAMPAIGN_AREAS):
+        if not 0 <= target <= self.furthest_area():
+            if target > self.furthest_area() and target < len(CAMPAIGN_AREAS):
+                left = (self.campaign_unlocked
+                        - AREA_FIRST_LEVEL[self.campaign_area] + 1)
+                todo = area_level_count(self.campaign_area) - left + 1
+                self.set_note(f"CLEAR {todo} MORE TO OPEN "
+                              f"{CAMPAIGN_AREAS[target].upper()}")
+                self.audio.play("menuclick")
             return
         self.campaign_area = target
+        self.build_campaign_widgets()   # Space has a different row layout
         self.audio.play("menuclick")
         self.preview_area()
 
@@ -3311,9 +3526,18 @@ class Game:
         self.load_campaign_area(self.campaign_area)
         self.audio.use_playlist(CAMPAIGN_MUSIC_MODE)
 
+    def furthest_area(self):
+        """The last area the player may reach.
+
+        Unlocking is sequential, so clearing all five of an area is exactly
+        what pushes the unlocked level into the next one - which makes the
+        area of the unlocked level the frontier.
+        """
+        return campaign_area_of(self.campaign_unlocked)
+
     def campaign_level_at(self, index):
         """Continuous level number for row `index` of the shown area."""
-        return self.campaign_area * LEVELS_PER_AREA + index + 1
+        return AREA_FIRST_LEVEL[self.campaign_area] + index
 
     def start_campaign_level(self, number):
         if number > self.campaign_unlocked:
@@ -3535,6 +3759,22 @@ class Game:
             x = g["x"] + math.sin(self.time * 0.5 + g["phase"]) * g["sway"]
             screen.blit(art, art.get_rect(center=(int(x), int(g["y"]))))
 
+    def finish_buttons(self):
+        """Buttons on the finish screen. The finale replaces the usual pair
+        with a single CREDITS button, so input has to follow what is drawn."""
+        if self.finished_main_campaign():
+            return [self.credits_button]
+        return self.over_buttons
+
+    def roll_campaign_credits(self):
+        """The finale: leave the run and play the credits through once."""
+        self.over = False
+        self.on_title = True
+        self.title_ready = True
+        self.campaign_finale = True      # watch for the roll to finish
+        self.space_banner = False
+        self.open_credits()
+
     def open_credits(self):
         self.spawn_credit_gems()
         self.credits_open = True
@@ -3546,6 +3786,12 @@ class Game:
     def close_credits(self):
         self.credits_open = False
         self.credit_armed = False
+        if self.campaign_finale:
+            # Skipped the roll, but the run was still finished - pay out
+            # rather than stranding the reward behind sitting through it.
+            self.campaign_finale = False
+            self.unlock_space()
+            self.space_banner = True
         self.audio.play("menuclick")
         self.audio.use_playlist(TITLE)
 
@@ -3670,23 +3916,40 @@ class Game:
     def ease_pop(self, t):
         return ease_back(t) if self.bubbly else ease_in_out(t)
 
+    def apply_fullscreen(self, on):
+        """The one route in and out of fullscreen.
+
+        The menu toggle and F11 both come through here. They used not to:
+        F11 talked to the Display directly, so it could leave fullscreen
+        while the render scale stayed at 200% - a 2160x1620 layer in a
+        window that cannot be that big.
+        """
+        if self.display is None:
+            return None
+        # Order matters. Windowed mode opens a real WIDTH x HEIGHT window, so
+        # the scale has to come down BEFORE the window is created - resetting
+        # afterwards asked macOS for a 2160x1620 window first.
+        if not on and abs(RENDER_SCALE - 1.0) > 0.01:
+            self.rebuild_at_scale(1.0)
+        surface = self.display.set_fullscreen(on, self)
+        self.settings["fullscreen"] = bool(
+            surface.get_flags() & pygame.FULLSCREEN)
+        if not self.settings["fullscreen"]:
+            # The stored setting resets too, so it cannot spring back to 200%
+            # the next time fullscreen is opened.
+            self.settings["render_scale"] = DEFAULT_RENDER_SCALE
+        if self.menu_open:
+            self.build_scale_buttons()  # the chips only exist in fullscreen
+        self.save_settings()
+        return surface
+
+    def toggle_fullscreen(self):
+        return self.apply_fullscreen(not self.display.fullscreen)
+
     def toggle_setting(self, key):
         if key == "fullscreen" and self.display is not None:
-            surface = self.display.toggle_with(self)
-            self.settings[key] = bool(surface.get_flags() & pygame.FULLSCREEN)
-            # Windowed mode opens a real WIDTH x HEIGHT window, so a 2x layer
-            # would ask for a 2160x1620 window and overflow the monitor. Drop
-            # to 1:1 on the way out and restore the choice on the way back in.
-            if self.settings[key]:
-                want = self.settings.get("render_scale", DEFAULT_RENDER_SCALE)
-                if abs(want - RENDER_SCALE) > 0.01:
-                    self.apply_scale(want)
-            elif abs(RENDER_SCALE - 1.0) > 0.01:
-                self.rebuild_at_scale(1.0)
-            if self.menu_open:
-                self.build_scale_buttons()  # rebuild for new fullscreen state
+            self.toggle_fullscreen()
             self.audio.play("menuclick")
-            self.save_settings()      # this return used to skip the write
             return
         self.settings[key] = not self.settings.get(key, True)
         if key == "shake":
@@ -3798,6 +4061,10 @@ class Game:
         # The campaign picker replaces the title screen rather than sitting on
         # top of it, so the mode chooser goes away with the logo. Behind a
         # translucent panel it would otherwise still read through.
+        if not self.campaign_open:
+            # achievement row, just under the logo
+            self.draw_stars(screen, S(232))
+
         if self.campaign_open:
             pass
         elif self.title_ready:
@@ -3833,6 +4100,10 @@ class Game:
             self.draw_extras(screen)
         if self.campaign_open:
             self.draw_campaign(screen)
+        if self.space_banner:
+            self.draw_space_banner(screen)
+        if self.star_banner:
+            self.draw_star_banner(screen)
         if self.menu_open:
             self.draw_menu(screen)
         if self.wipe_open:
@@ -3844,6 +4115,106 @@ class Game:
                                             GOLD if self.credit_armed else DIM)
             screen.blit(credit, (WIDTH - S(20) - credit.get_width(),
                                  HEIGHT - S(20) - credit.get_height()))
+
+    @staticmethod
+    def space_banner_rect():
+        return pygame.Rect(WIDTH // 2 - S(250), HEIGHT // 2 - S(120),
+                           S(500), S(240))
+
+    def star_size(self):
+        return S(38)
+
+    def draw_star(self, screen, rect, earned):
+        """One achievement star. Uses ui/Star.png when it is there, and a
+        drawn five-point star when it is not."""
+        art = self.star_art
+        if art is not None:
+            image = pygame.transform.smoothscale(art, rect.size)
+            if not earned:
+                # unearned: flattened to a dark silhouette so the row still
+                # shows how many there are to collect
+                image = image.copy()
+                image.fill((70, 74, 92, 190), special_flags=pygame.BLEND_RGBA_MULT)
+            screen.blit(image, rect.topleft)
+            return
+        points = []
+        cx, cy = rect.centerx, rect.centery
+        outer, inner = rect.width / 2.0, rect.width / 4.6
+        for i in range(10):
+            ang = -math.pi / 2 + i * math.pi / 5
+            r = outer if i % 2 == 0 else inner
+            points.append((cx + math.cos(ang) * r, cy + math.sin(ang) * r))
+        pygame.draw.polygon(screen, GOLD if earned else (70, 74, 92), points)
+
+    def draw_stars(self, screen, cy):
+        """The achievement row, centred under the logo.
+
+        Only earned stars are drawn - an unearned one shows nothing at all
+        rather than a placeholder, so the row grows as they are collected
+        instead of advertising what is missing.
+        """
+        earned = [k for k, _, _ in STAR_DEFS if k in self.stars]
+        if not earned:
+            return
+        size = self.star_size()
+        gap = S(14)
+        total = len(earned) * size + (len(earned) - 1) * gap
+        x = WIDTH // 2 - total // 2
+        for _ in earned:
+            self.draw_star(screen, pygame.Rect(x, cy - size // 2, size, size),
+                           True)
+            x += size + gap
+
+    @staticmethod
+    def star_banner_rect():
+        return pygame.Rect(WIDTH // 2 - S(230), HEIGHT // 2 - S(120),
+                           S(460), S(240))
+
+    def draw_star_banner(self, screen):
+        box = self.star_banner_rect()
+        screen.blit(translucent(box.size, DIALOG_FILL, GOLD + (250,), S(16)),
+                    box.topleft)
+        big = self.star_size() * 2
+        self.draw_star(screen, pygame.Rect(box.centerx - big // 2,
+                                           box.y + S(22), big, big), True)
+        y = box.y + S(22) + big + S(12)
+        for font, text, colour, gap in (
+                (self.font_small, "STAR EARNED", DIM, S(8)),
+                (self.font_big, self.star_title(self.star_banner), GOLD, S(8)),
+                (self.font_small, self.star_blurb(self.star_banner), DIM, 0)):
+            image = font.render(text, True, colour)
+            screen.blit(image, (box.centerx - image.get_width() // 2, y))
+            y += image.get_height() + gap
+        for button in self.star_buttons:
+            button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
+
+    def draw_space_banner(self, screen):
+        box = self.space_banner_rect()
+        screen.blit(translucent(box.size, DIALOG_FILL, (96, 200, 232, 250),
+                                S(16)), box.topleft)
+        lines = [(self.font_big, "NEW AREA UNLOCKED", (96, 200, 232), S(18)),
+                 (self.font_huge, "SPACE", GOLD, S(16)),
+                 (self.font_small,
+                  f"{SPACE_LEVELS} LEVELS, AND THEY ARE BRUTAL", DIM, 0)]
+        y = box.y + S(30)
+        for font, text, colour, gap in lines:
+            image = font.render(text, True, colour)
+            screen.blit(image, (box.centerx - image.get_width() // 2, y))
+            y += image.get_height() + gap
+        for button in self.space_buttons:
+            button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
+
+    def close_space_banner(self):
+        """Straight into the picker, showing the new area."""
+        self.space_banner = False
+        self.campaign_level_num = AREA_FIRST_LEVEL[SPACE_AREA]
+        self.on_title = True
+        self.title_ready = True
+        self.campaign_area = SPACE_AREA
+        self.campaign_open = True
+        self.build_campaign_widgets()
+        self.preview_area()
+        self.audio.play("menuclick")
 
     def draw_campaign(self, screen):
         box = self.campaign_rect()
@@ -3867,7 +4238,7 @@ class Game:
         for i, arrow in enumerate(self.campaign_arrows):
             # grey the arrow out at either end of the run of areas
             live = (self.campaign_area > 0) if i == 0 \
-                else (self.campaign_area < len(CAMPAIGN_AREAS) - 1)
+                else (self.campaign_area < self.furthest_area())
             r = arrow.rect
             tint = (96, 200, 232) if live else (90, 96, 110)
             screen.blit(translucent(r.size,
@@ -3886,6 +4257,19 @@ class Game:
                        (r.centerx + w // 2, r.centery)]
             pygame.draw.polygon(screen, tint, pts)
 
+        # One text size for every row on screen, chosen to fit the longest
+        # line any of them needs. Fitting each row on its own left neighbouring
+        # rows at visibly different sizes.
+        row_font = self.font_small
+        if self.campaign_rows:
+            avail = self.campaign_rows[0].width - S(100)
+            for _i in range(len(self.campaign_rows)):
+                goal_i = campaign_level(self.campaign_level_at(_i))
+                for line in (goal_i["text"],
+                             campaign_modifier_label(goal_i, short=True)):
+                    if line:
+                        row_font = Button.fit(row_font, line, avail)
+
         for i, rect in enumerate(self.campaign_rows):
             number = self.campaign_level_at(i)
             goal = campaign_level(number)
@@ -3903,18 +4287,20 @@ class Game:
                 f"LEVEL {number}", True, (90, 96, 110) if locked else TEXT)
             screen.blit(label, (rect.x + S(14), rect.y + S(6)))
             text = "LOCKED" if locked else goal["text"]
-            note = Button.fit(self.font_small, text, rect.width - S(120))
-            screen.blit(note.render(text, True, DIM),
+            mods = "" if locked else campaign_modifier_label(goal, short=True)
+            # Both lines share ONE size, chosen to fit whichever is longer.
+            # Sizing them separately left a row with a tiny objective above a
+            # full-size modifier list, which read as broken rather than tidy.
+            small = row_font
+            screen.blit(small.render(text, True, DIM),
                         (rect.x + S(14),
                          rect.y + S(6) + label.get_height() + S(4)))
-            mods = "" if locked else campaign_modifier_label(goal)
             if mods:
                 # the twist this level adds, in the Extras accent colour
-                chip = Button.fit(self.font_small, mods, rect.width - S(120))
-                screen.blit(chip.render(mods, True, (176, 140, 240)),
+                screen.blit(small.render(mods, True, (176, 140, 240)),
                             (rect.x + S(14), rect.y + S(6)
                              + label.get_height() + S(4)
-                             + note.get_height() + S(2)))
+                             + small.get_height() + S(2)))
             if beaten:
                 tick = self.font.render("CLEAR", True, (126, 216, 150))
                 screen.blit(tick, (rect.right - S(14) - tick.get_width(),
@@ -3976,6 +4362,9 @@ class Game:
     def reset(self, mode=None):
         if mode is not None:
             self.mode = mode
+        # The panel differs by mode - campaign has no background or music
+        # picker - so the widgets are rebuilt for whichever mode this is.
+        self.build_widgets()
         self.time = 0.0
         self.score = 0
         self.level = 1
@@ -4025,6 +4414,7 @@ class Game:
         self.moves_left = (self.goal or {}).get("moves", 0)
         self.gems_cleared = 0
         self.campaign_won = False
+        self._objective_bottom = 0
         # Use the selected duration for timed mode, otherwise use default
         if self.mode == CAMPAIGN and self.timed:
             self.time_left = self.goal["seconds"]
@@ -4201,6 +4591,13 @@ class Game:
         pygame.draw.rect(base, PANEL_EDGE, base.get_rect(), 1, border_radius=14)
         return base
 
+    def shown_area(self):
+        """The area whose artwork should be on screen: the one being browsed
+        in the picker, or the one the current level belongs to."""
+        if self.campaign_open:
+            return self.campaign_area
+        return campaign_area_of(self.campaign_level_num)
+
     def load_campaign_area(self, area):
         """Swap in one area's backdrop and music."""
         self.campaign_bg = load_campaign_background(area)
@@ -4212,7 +4609,11 @@ class Game:
         self.audio.set_campaign_playlist(tracks)
 
     def background_for_level(self):
-        if self.mode == CAMPAIGN and self.campaign_bg is not None:
+        if self.mode == CAMPAIGN:
+            # An area shows its OWN artwork or nothing. Falling through to
+            # the general pool meant a missing or undecodable area image was
+            # replaced by a randomly picked backgrounds/ photo, which looked
+            # exactly like the backdrop shuffling between levels.
             return self.campaign_bg
         if not self.backgrounds:
             return None
@@ -4278,7 +4679,8 @@ class Game:
         else:
             self.shown_progress += step * min(1.0, dt * 6.0)
 
-        for button in (self.buttons + self.menu_buttons + self.title_buttons
+        for button in (self.panel_buttons() + self.menu_buttons
+                       + self.title_buttons + self.finish_buttons()
                        + self.extra_buttons + self.over_buttons
                        + self.music_buttons + self.resume_buttons):
             key = id(button)
@@ -4287,7 +4689,7 @@ class Game:
             self.hover_lift[key] = have + (want - have) * min(1.0, dt * 12.0)
 
     def draw_note(self, screen, x, y, width):
-        """Draw note with fade in/out and rainbow color for BOARD WIPE and RAINBOW."""
+        """Draw the note line, fading in and out."""
         if not self.note:
             return
         # Fade in first 0.3s, out after 2.0s, total 2.5s
@@ -4298,13 +4700,7 @@ class Game:
             # drifts up a few pixels as it appears, so it does not just blink on
             y += int(round(10 * (1.0 - ease_out(fade_in))))
         
-        # Use rainbow color for "BOARD WIPE!" and "RAINBOW!", normal gold for others
-        if "BOARD WIPE" in self.note or "RAINBOW" in self.note:
-            hue = (self.note_time * 0.8) % 1.0
-            rgb = colorsys.hsv_to_rgb(hue, 0.9, 1.0)
-            color = tuple(int(c * 255) for c in rgb)
-        else:
-            color = GOLD
+        color = GOLD
         
         # Render text
         label = self.font.render(self.note, True, color)
@@ -4530,6 +4926,8 @@ class Game:
         self.level_floor += self.level_target()   # overflow carries forward
         self.advance_background()
         self.level += 1
+        if self.mode == ENDLESS and self.level >= ENDLESS_STAR_LEVEL:
+            self.award_star("endless100")
         self.sel = None
         self.press = None
         self.pair = None
@@ -4616,17 +5014,44 @@ class Game:
 
     # -- widgets ----------------------------------------------------------
 
+    def panel_buttons(self):
+        """The side-panel buttons for the current mode."""
+        return self.campaign_panel if self.mode == CAMPAIGN else self.buttons
+
     def build_widgets(self):
+        # hover_lift is keyed by id(button), and rebuilding widgets frees the
+        # old ones - whose addresses the new ones can reuse. Dropping the
+        # easing state avoids a fresh button inheriting a stale hover.
+        self.hover_lift = {}
         x = PANEL_X + S(16)
         w = PANEL_W - S(32)
         bottom = PANEL_Y + PANEL_H - S(16)
-        self.buttons = [
-            Button((x, bottom - S(46) * 4 - S(30), w, S(46)), "HINT",
+        # In campaign the area supplies the backdrop and the music, so those
+        # two pickers are not built at all; HINT takes the space they leave.
+        if self.mode == CAMPAIGN:
+            hint_h = S(46) * 3 + S(30)
+            self.buttons = [
+                Button((x, bottom - S(46) - S(14) - hint_h, w, hint_h), "HINT",
+                       self.show_hint, accent=HINT_COLOR),
+                Button((x, bottom - S(46), w, S(46)), "MENU", self.open_menu),
+            ]
+        else:
+            self.buttons = [
+                Button((x, bottom - S(46) * 4 - S(30), w, S(46)), "HINT",
+                       self.show_hint, accent=HINT_COLOR),
+                Button((x, bottom - S(46) * 3 - S(20), w, S(46)), "BACKGROUNDS",
+                       self.open_background_picker, accent=(176, 140, 240)),
+                Button((x, bottom - S(46) * 2 - S(10), w, S(46)), "MUSIC",
+                       self.open_music, accent=(150, 160, 190)),
+                Button((x, bottom - S(46), w, S(46)), "MENU", self.open_menu),
+            ]
+        # A campaign level fixes its own backdrop and music, so those two
+        # buttons are gone entirely there and HINT takes the space they
+        # freed up rather than leaving a hole in the panel.
+        tall = S(46) * 3 + S(20)
+        self.campaign_panel = [
+            Button((x, bottom - S(46) - S(10) - tall, w, tall), "HINT",
                    self.show_hint, accent=HINT_COLOR),
-            Button((x, bottom - S(46) * 3 - S(20), w, S(46)), "BACKGROUNDS",
-                   self.open_background_picker, accent=(176, 140, 240)),
-            Button((x, bottom - S(46) * 2 - S(10), w, S(46)), "MUSIC",
-                   self.open_music, accent=(150, 160, 190)),
             Button((x, bottom - S(46), w, S(46)), "MENU", self.open_menu),
         ]
 
@@ -4776,8 +5201,12 @@ class Game:
             Button((ox, over.bottom - S(74), third, S(46)), "PLAY AGAIN",
                    self.replay_or_advance, accent=(126, 216, 150)),
             Button((ox + third + S(20), over.bottom - S(74), third, S(46)), "TITLE",
-                   self.return_to_title, accent=GOLD),
+                   self.leave_run, accent=GOLD),
         ]
+        # Shown alone once the main campaign is finished.
+        self.credits_button = Button(
+            (ox, over.bottom - S(74), S(220), S(46)), "CREDITS",
+            self.roll_campaign_credits, accent=GOLD)
 
     @staticmethod
     def music_rect():
@@ -4899,7 +5328,8 @@ class Game:
         return (self.menu_open or self.music_open or self.bg_picker_open
                 or self.extras_open or self.credits_open or self.wipe_open
                 or self.resume_open or self.timed_duration_picker_open
-                or self.campaign_open)
+                or self.campaign_open or self.space_banner
+                or self.star_banner)
 
     def close_music(self):
         self.music_open = False
@@ -4949,21 +5379,70 @@ class Game:
 
     # -- saving ------------------------------------------------------------
 
+    def leave_run(self):
+        """The right-hand finish button: the picker in campaign, the title
+        screen everywhere else."""
+        if self.mode == CAMPAIGN:
+            self.return_to_level_select()
+        else:
+            self.return_to_title()
+
+    def return_to_level_select(self):
+        """Back to the campaign picker, opened on the area just played."""
+        self.save_run()
+        self.over = False
+        self.menu_open = False
+        self.music_open = False
+        self.on_title = True
+        self.title_ready = True        # the picker is the screen, not the modes
+        self.campaign_area = min(campaign_area_of(self.campaign_level_num),
+                                 self.furthest_area())
+        self.campaign_open = True
+        self.credit_armed = False
+        self.build_campaign_widgets()
+        self.preview_area()
+
     def replay_or_advance(self):
-        """PLAY AGAIN retries a failed level, or moves on from a cleared one."""
-        if self.mode == CAMPAIGN and self.campaign_won:
-            if self.campaign_level_num < CAMPAIGN_LEVELS:
-                self.campaign_level_num += 1
-            else:
-                self.return_to_title()      # the run is finished
-                return
+        """PLAY AGAIN replays the level just played.
+
+        It used to jump to the next one after a win, which read wrong next to
+        a button labelled PLAY AGAIN. Moving on is LEVEL SELECT's job now -
+        it opens on this area with the next level already unlocked.
+        """
         self.reset(self.mode)
+
+    def award_star(self, key):
+        """Grant an achievement once, and announce it."""
+        if key in self.stars or self.data_wiped:
+            return False
+        self.stars.add(key)
+        self.star_banner = key
+        self.audio.play("levelup")
+        self.save_campaign()
+        return True
+
+    def star_title(self, key):
+        for k, title, _ in STAR_DEFS:
+            if k == key:
+                return title
+        return key.upper()
+
+    def star_blurb(self, key):
+        for k, _, blurb in STAR_DEFS:
+            if k == key:
+                return blurb
+        return ""
+
+    def close_star_banner(self):
+        self.star_banner = None
+        self.audio.play("menuclick")
 
     def save_campaign(self):
         if self.data_wiped:
             return
         data = read_saves()
-        data["campaign"] = {"unlocked": int(self.campaign_unlocked)}
+        data["campaign"] = {"unlocked": int(self.campaign_unlocked),
+                            "stars": sorted(self.stars)}
         write_saves(data)
 
     def load_campaign(self):
@@ -4972,6 +5451,8 @@ class Game:
             got = entry.get("unlocked")
             if isinstance(got, int):
                 self.campaign_unlocked = max(1, min(CAMPAIGN_LEVELS, got))
+            known = {k for k, _, _ in STAR_DEFS}
+            self.stars = {k for k in entry.get("stars", []) if k in known}
         # open the picker on the area they are actually up to
         self.campaign_area = campaign_area_of(self.campaign_unlocked)
 
@@ -5116,6 +5597,10 @@ class Game:
         self.audio.use_playlist(TITLE)
 
     def open_menu(self):
+        # The picker is a whole screen, not a panel, so the menu takes over
+        # from it rather than sitting on top.
+        if self.campaign_open:
+            self.close_campaign()
         self.sync_menu_labels()
         self.build_scale_buttons()  # rebuild scale buttons whenever menu opens
         # the menu takes over: nothing else stays open behind it
@@ -5214,6 +5699,11 @@ class Game:
         return None
 
     def widgets_at(self, pos):
+        if self.star_banner:
+            for button in self.star_buttons:
+                if button.hit(pos):
+                    return button
+            return None
         """Whatever interactive thing is under the cursor, overlays first."""
         if self.on_title and self.resume_open:
             for button in self.resume_buttons:
@@ -5291,7 +5781,7 @@ class Game:
                     return button
             return None
         if self.over:
-            for button in self.over_buttons:
+            for button in self.finish_buttons():
                 if button.hit(pos):
                     return button
             return None
@@ -5306,9 +5796,7 @@ class Game:
                 if button.hit(pos):
                     return button
             return None
-        for button in self.buttons:
-            if self.mode == CAMPAIGN and button.label in LOCKED_IN_CAMPAIGN:
-                continue          # the area owns these; do not even hover
+        for button in self.panel_buttons():
             if button.hit(pos):
                 return button
         return None
@@ -5325,6 +5813,20 @@ class Game:
             if not self.duration_picker_rect().collidepoint(pos):
                 self.close_duration_picker()
             return
+        if self.star_banner:
+            for button in self.star_buttons:
+                if button.hit(pos):
+                    button.down = True
+                    self.audio.play("menuclick")
+                    return
+            return          # nothing behind it is reachable
+        if self.on_title and self.space_banner:
+            for button in self.space_buttons:
+                if button.hit(pos):
+                    button.down = True
+                    self.audio.play("menuclick")
+                    return
+            return          # nothing else is reachable behind it
         if self.on_title and self.campaign_open:
             for i, rect in enumerate(self.campaign_rows):
                 if rect.collidepoint(pos):
@@ -5335,8 +5837,9 @@ class Game:
                     button.down = True
                     self.audio.play("menuclick")
                     return
-            if not self.campaign_rect().collidepoint(pos):
-                self.close_campaign()
+            # Clicking away does NOT back out. Losing a level browse to a
+            # stray click on the backdrop was worse than needing to aim for
+            # the BACK button, which is right there.
             return
         if self.on_title and self.extras_open:
             for key, rect, _, _ in self.extra_rows:
@@ -5474,6 +5977,10 @@ class Game:
                 active = self.resume_buttons
             elif self.wipe_open:
                 active = self.wipe_buttons
+            elif self.star_banner:
+                active = self.star_buttons
+            elif self.space_banner:
+                active = self.space_buttons
             elif self.campaign_open:
                 active = self.campaign_arrows + self.campaign_buttons
             elif self.extras_open:
@@ -5481,18 +5988,19 @@ class Game:
             else:
                 active = (self.title_buttons if self.title_ready else [])
         elif self.over:
-            active = self.over_buttons
+            active = self.finish_buttons()
         elif self.menu_open:
             active = self.menu_buttons
         else:
-            active = self.buttons
-        for button in (self.buttons + self.menu_buttons + self.over_buttons
+            active = self.panel_buttons()
+        for button in (self.buttons + self.campaign_panel + self.finish_buttons()
+                       + self.menu_buttons + self.over_buttons
                        + self.title_buttons + self.setting_buttons
                        + self.extra_buttons + self.duration_buttons
                        + self.credit_buttons + self.music_buttons
                        + self.bg_picker_buttons + self.resume_buttons
                        + self.campaign_arrows + self.campaign_buttons
-                       + self.wipe_buttons):
+                       + self.space_buttons + self.wipe_buttons):
             button.hover = button in active and button.hit(pos)
 
     def on_up(self, pos):
@@ -5503,12 +6011,14 @@ class Game:
             return
 
         fired = None
-        for button in (self.buttons + self.menu_buttons + self.over_buttons
+        for button in (self.buttons + self.campaign_panel + self.finish_buttons()
+                       + self.menu_buttons + self.over_buttons
                        + self.title_buttons + self.music_buttons
                        + self.extra_buttons + self.scale_buttons
                        + self.setting_buttons + self.credit_buttons
                        + self.resume_buttons + self.wipe_buttons + self.duration_buttons
                        + self.campaign_arrows + self.campaign_buttons
+                       + self.space_buttons + self.star_buttons
                        + self.bg_picker_buttons):
             if button.down and button.hit(pos):
                 fired = button
@@ -5561,7 +6071,18 @@ class Game:
             self.update_credit_gems(dt)
             self.credit_scroll += S(BASE_CREDIT_SPEED) * dt
             if self.credit_scroll > self.credits_height():
-                self.credit_scroll = self.start_scroll()   # loop the roll
+                if self.campaign_finale:
+                    # Played through once as the campaign's ending. Stop the
+                    # roll and hand over the reward.
+                    self.campaign_finale = False
+                    self.credits_open = False
+                    self.credit_armed = False
+                    self.unlock_space()
+                    self.space_banner = True
+                    self.audio.play("levelup")
+                    self.audio.use_playlist(TITLE)
+                else:
+                    self.credit_scroll = self.start_scroll()   # loop the roll
         if self.on_title:
             self.update_motes(dt)
             return
@@ -5807,8 +6328,6 @@ class Game:
                 # Now get targets with the swapped positions (bomb/rock is now at hyper)
                 targets = rock_bomb_targets(self.grid, other, hyper)
                 origin = hyper  # Origin is now where the bomb/rock ended up after swap
-                cell_type_name = "ROCKS" if other_gem.cell_type == CELL_ROCK else "BOMBS"
-                self.set_note(f"ALL {cell_type_name}!")
                 self.spawn_effect("hyper", *origin)
                 self.begin_rainbow(origin, targets)
                 return
@@ -5819,7 +6338,6 @@ class Game:
             # detonating from where it started.
             self.apply_swap()
             origin = other
-            self.set_note("BOARD WIPE!" if both else "RAINBOW!")
             self.spawn_effect("hyper", *origin)
             self.begin_rainbow(origin, targets)
             return
@@ -5908,6 +6426,9 @@ class Game:
                 x = BOARD_X + int((c + 0.5) * TILE)
                 y = BOARD_Y + int((r + 0.5) * TILE)
                 self.score_pops.append(ScorePop(x, y, bonus))
+        if self.mode == CAMPAIGN:
+            gained = int(round(gained * campaign_score_multiplier(
+                campaign_area_of(self.campaign_level_num))))
         self.score += gained
         self.gems_cleared += len(cells)
 
@@ -5921,12 +6442,9 @@ class Game:
             self.add_shake(SHAKE_FLAME)
             self.audio.play("explode")
             self.hurl_blast(cells, flames[0])
-        if HYPER in spawns.values():
-            self.set_note("HYPERCUBE!")
-        elif FLAME in spawns.values():
-            self.set_note("FLAME GEM!")
-        elif self.cascade > 1:
-            self.set_note(f"CASCADE x{self.cascade}")
+        # The board already says all this with its own effects and sounds, so
+        # there is no shouted label for cascades, hypercubes or flame gems.
+        # The note line is kept for things the player cannot otherwise see.
         self.state = "clear"
 
     def finish_clear(self):
@@ -5997,6 +6515,13 @@ class Game:
     def win_campaign(self):
         self.campaign_won = True
         self.unlock_next_level()
+        # The last level of The Deep finishes the main run; the last level of
+        # Space finishes everything. Unlocking stops at 60, so completing the
+        # final level is checked by number rather than by what it unlocked.
+        if self.campaign_level_num == MAIN_CAMPAIGN_LEVELS:
+            self.award_star("deep")
+        elif self.campaign_level_num == CAMPAIGN_LEVELS:
+            self.award_star("space")
         self.set_note("LEVEL COMPLETE")
         self.audio.play("levelup")
         self.over = True
@@ -6005,10 +6530,27 @@ class Game:
         self.menu_open = False
 
     def unlock_next_level(self):
-        nxt = min(CAMPAIGN_LEVELS, self.campaign_level_num + 1)
+        # Space is not opened by clearing level 50 - the credits do that, so
+        # the reward lands after the run is actually celebrated.
+        ceiling = (MAIN_CAMPAIGN_LEVELS if self.campaign_unlocked
+                   <= MAIN_CAMPAIGN_LEVELS else CAMPAIGN_LEVELS)
+        nxt = min(ceiling, self.campaign_level_num + 1)
         if nxt > self.campaign_unlocked:
             self.campaign_unlocked = nxt
             self.save_campaign()
+
+    def finished_main_campaign(self):
+        """Just cleared the last level of the last ordinary area."""
+        return (self.mode == CAMPAIGN and self.campaign_won
+                and self.campaign_level_num == MAIN_CAMPAIGN_LEVELS)
+
+    def unlock_space(self):
+        """Called when the credits finish. Opens Space, once."""
+        if self.campaign_unlocked >= AREA_FIRST_LEVEL[SPACE_AREA]:
+            return False
+        self.campaign_unlocked = AREA_FIRST_LEVEL[SPACE_AREA]
+        self.save_campaign()
+        return True
 
     def settle(self):
         self.pair = None
@@ -6022,7 +6564,6 @@ class Game:
         if blast:
             self.cascade = 1
             self.multi_run = False
-            self.set_note("BOOM!")
             self.add_shake(SHAKE_BOMB)
             self.audio.play("explode")
             for r, c in self.spent_bombs:
@@ -6287,20 +6828,25 @@ class Game:
             # Zen keeps no score, so the readouts would only ever show 0
             zen = self.font_score.render("ZEN", True, GOLD)
             screen.blit(zen, (x, PANEL_Y + S(40)))
-            for button in self.buttons:
+            for button in self.panel_buttons():
                 button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
             self.draw_note(screen, x, PANEL_Y + S(208), width)
-            track = self.audio.now_playing()
-            if track:
-                screen.blit(self.font_small.render("NOW PLAYING", True, DIM),
-                            (x, PANEL_Y + PANEL_H - S(296)))
-                self.wrapped(screen, track, x, PANEL_Y + PANEL_H - S(274),
-                             width, DIM)
             return
 
-        screen.blit(self.font_small.render("SCORE", True, DIM), (x, PANEL_Y + S(26)))
-        screen.blit(self.font_score.render(f"{int(self.shown_score):,}", True, TEXT),
-                    (x, PANEL_Y + S(48)))
+        # On a "clear N gems" level the score is not what you are chasing, so
+        # the big readout counts down the gems instead.
+        if self.mode == CAMPAIGN and self.goal \
+                and self.goal["kind"] == GOAL_GEMS:
+            left = max(0, self.goal["target"] - self.gems_cleared)
+            screen.blit(self.font_small.render("GEMS LEFT", True, DIM),
+                        (x, PANEL_Y + S(26)))
+            self.blit_readout(screen, f"{left:,}", x, PANEL_Y + S(48), width,
+                              GOLD if left else (126, 216, 150))
+        else:
+            screen.blit(self.font_small.render("SCORE", True, DIM),
+                        (x, PANEL_Y + S(26)))
+            self.blit_readout(screen, f"{int(self.shown_score):,}",
+                              x, PANEL_Y + S(48), width, TEXT)
 
         if self.timed:
             low = self.time_left <= LOW_TIME
@@ -6331,7 +6877,11 @@ class Game:
                      width, S(10), self.shown_progress, GOLD)
 
         if self.extra("lock"):
-            y = PANEL_Y + S(250)
+            # The campaign objective above is variable height - four
+            # modifiers wrap onto several lines - so this starts below
+            # whatever it actually used rather than at a fixed offset.
+            y = max(PANEL_Y + S(250),
+                    getattr(self, "_objective_bottom", 0) + S(14))
             screen.blit(self.font_small.render("SCORING", True, DIM), (x, y))
             sprite = self.normal[self.lock_kind]
             screen.blit(sprite, (x, y + 20))
@@ -6353,31 +6903,33 @@ class Game:
             note_y -= S(6)
         self.draw_note(screen, x, note_y, width)
 
-        track = self.audio.now_playing()
-        if track:
-            screen.blit(self.font_small.render("NOW PLAYING", True, DIM),
-                        (x, PANEL_Y + PANEL_H - S(296)))
-            self.wrapped(screen, track, x, PANEL_Y + PANEL_H - S(274), width, DIM)
-
         if self.mode == CAMPAIGN and self.goal is not None:
-            self.draw_objective(screen, x,
-                                PANEL_Y + (S(186) if self.timed else S(116)),
-                                width)
+            self._objective_bottom = self.draw_objective(
+                screen, x, PANEL_Y + (S(186) if self.timed else S(116)), width)
 
-        for button in self.buttons:
-            if self.mode == CAMPAIGN and button.label in LOCKED_IN_CAMPAIGN:
-                self.draw_locked_button(screen, button)
-            else:
-                button.draw(screen, self.font,
-                            self.hover_lift.get(id(button), 0.0))
+        for button in self.panel_buttons():
+            button.draw(screen, self.font,
+                        self.hover_lift.get(id(button), 0.0))
 
-    def draw_locked_button(self, screen, button):
-        """A panel button the current mode has taken control of."""
-        screen.blit(translucent(button.rect.size, (255, 255, 255, 10), None,
-                                S(10)), button.rect.topleft)
-        label = Button.fit(self.font, button.label, button.rect.width - S(14))
-        image = label.render(button.label, True, (86, 92, 106))
-        screen.blit(image, image.get_rect(center=button.rect.center))
+    def blit_readout(self, screen, text, x, y, width, colour):
+        """The big number on the panel, shrunk until it fits.
+
+        At full size the score ran off the panel past 999,999. Button.fit
+        steps the font down, but ONLY for the built-in pixel face - a .ttf
+        dropped in fonts/ has no smaller() and came back unchanged, so the
+        number still overflowed. Whatever the font, the rendered image is
+        squeezed to the width as a backstop.
+        """
+        font = Button.fit(self.font_score, text, width)
+        image = font.render(text, True, colour)
+        if image.get_width() > width:
+            scale = width / image.get_width()
+            image = pygame.transform.smoothscale(
+                image, (width, max(1, int(image.get_height() * scale))))
+        # Sit shorter numbers on the same baseline as the full-size ones, so
+        # the readout does not hop about as the score grows.
+        drop = self.font_score.get_height() - image.get_height()
+        screen.blit(image, (x, y + max(0, drop)))
 
     def draw_objective(self, screen, x, y, width):
         """Objective and how far along it is, on the score panel."""
@@ -6414,30 +6966,42 @@ class Game:
 
         mods = campaign_modifier_label(goal)
         if mods:
-            self.wrapped(screen, mods, x, y, width, (176, 140, 240))
-            y += self.font_small.get_height() * (
-                1 + (self.font_small.size(mods)[0] > width)) + S(6)
+            # Space levels carry up to four at once, so this drops a size to
+            # keep the whole list readable inside the panel.
+            tiny = getattr(self.font_small, "smaller", lambda: self.font_small)()
+            y = self.wrapped(screen, mods, x, y, width, (176, 140, 240), tiny)
+            y += S(6)
 
         if goal["kind"] != GOAL_TIME:
             hot = self.moves_left <= 3
             left = self.font_small.render(f"{self.moves_left} MOVES LEFT", True,
                                           (232, 92, 92) if hot else DIM)
             screen.blit(left, (x, y))
+            y += left.get_height()
+        return y
 
-    def wrapped(self, screen, text, x, y, width, color):
-        """Panel is narrow, so long notes need to wrap rather than overflow."""
+    def wrapped(self, screen, text, x, y, width, color, font=None):
+        """Panel is narrow, so long notes need to wrap rather than overflow.
+
+        Returns the y just past the last line so callers can carry on below
+        it. Guessing the height instead is how a four-modifier list ended up
+        printed over the MOVES LEFT line underneath it.
+        """
+        font = font or self.font_small
         words = text.split()
         line = ""
         for word in words:
             trial = f"{line} {word}".strip()
-            if self.font_small.size(trial)[0] > width and line:
-                screen.blit(self.font_small.render(line, True, color), (x, y))
-                y += self.font_small.get_height() + S(3)
+            if font.size(trial)[0] > width and line:
+                screen.blit(font.render(line, True, color), (x, y))
+                y += font.get_height() + S(3)
                 line = word
             else:
                 line = trial
         if line:
-            screen.blit(self.font_small.render(line, True, color), (x, y))
+            screen.blit(font.render(line, True, color), (x, y))
+            y += font.get_height()
+        return y
 
     def spotlight_hole(self):
         """A black tile whose alpha fades from clear at the centre to solid
@@ -6575,6 +7139,18 @@ class Game:
             screen.blit(image, (box.centerx - image.get_width() // 2, y))
             y += image.get_height() + gap
 
+        if self.finished_main_campaign():
+            # The whole run is done. One button, and it rolls the credits.
+            self.credits_button.rect.centerx = box.centerx
+            self.credits_button.draw(screen, self.font,
+                                     self.hover_lift.get(
+                                         id(self.credits_button), 0.0))
+            return
+
+        # The right-hand button goes back to the picker in campaign, so it
+        # says so.
+        self.over_buttons[1].label = ("LEVEL SELECT" if self.mode == CAMPAIGN
+                                      else "TITLE")
         for button in self.over_buttons:
             button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
 
@@ -6609,6 +7185,10 @@ class Game:
         if self.on_title:
             bottom.label, bottom.action = "RESET DATA", self.ask_wipe
             bottom.accent = (232, 92, 92)
+        elif self.mode == CAMPAIGN:
+            bottom.label = "RETURN TO LEVEL SELECTOR"
+            bottom.action = self.return_to_level_select
+            bottom.accent = GOLD
         else:
             bottom.label = "RETURN TO TITLE SCREEN"
             bottom.action = self.return_to_title
@@ -6721,6 +7301,13 @@ class Game:
         elif not self.backgrounds or self.backgrounds[0].get_size() != (WIDTH, HEIGHT):
             self.backgrounds = [fallback_background()]
         self.title_bg = load_title_background()
+        # The area backdrop is built to the layer size and converted for the
+        # current display format, so it has to be remade here with everything
+        # else. Leaving it meant a campaign level kept a backdrop sized for
+        # the old layer after a scale or fullscreen change - and on macOS a
+        # surface converted for the previous format can come back black.
+        if self.campaign_bg is not None:
+            self.campaign_bg = load_campaign_background(self.shown_area())
         self.title_art = self.build_title()
         self.banner = self.build_banner()
         self.skin = load_ui_skin()
@@ -6744,6 +7331,8 @@ class Game:
             return 120
         if self.wipe_open:
             return 232
+        if self.space_banner or self.star_banner:
+            return 232          # the reward notice owns the screen
         if (self.menu_open or self.music_open or self.bg_picker_open
                 or self.extras_open or self.resume_open
                 or self.timed_duration_picker_open):
@@ -6854,8 +7443,8 @@ class Game:
                         or (self.backgrounds[0] if self.backgrounds else None))
             return self.title_bg or (self.backgrounds[0]
                                      if self.backgrounds else None)
-        if self.mode == CAMPAIGN and self.campaign_bg is not None:
-            return self.campaign_bg      # the area's own artwork
+        if self.mode == CAMPAIGN:
+            return self.campaign_bg      # the area's own artwork, or nothing
         return self.background_for_level()
 
     def draw(self, screen, background=True):
@@ -7033,6 +7622,8 @@ class Game:
             self.draw_background_picker(screen)
         if self.over:
             self.draw_over(screen)
+        if self.star_banner:
+            self.draw_star_banner(screen)
 
 
 # --------------------------------------------------------------------------
@@ -7183,11 +7774,18 @@ class Display:
         The scaled copy is cached per (photo, size): rescaling a full-size
         photo every frame was wasteful, and doubly so now two of them are
         blended during a crossfade.
+
+        The key holds the Surface itself, NOT id(photo). An id is a memory
+        address, and a freed surface's address gets handed straight back to
+        the next one - so swapping backdrops quickly (arrowing through the
+        campaign areas) produced a cache hit on the previous area's artwork.
+        Keeping the object in the key also keeps it alive, so the address
+        cannot be recycled underneath the entry.
         """
         if alpha <= 0:
             return
         dw, dh = self.surface.get_size()
-        key = (id(photo), dw, dh)
+        key = (photo, dw, dh)
         art = self._cover_cache.get(key)
         if art is None:
             pw, ph = photo.get_size()
@@ -7336,7 +7934,7 @@ def main():
                 elif e.key == pygame.K_h:
                     game.show_hint()
                 elif e.key == pygame.K_F11:
-                    display.toggle_with(game)
+                    game.toggle_fullscreen()
                 elif e.key == pygame.K_n:
                     game.open_music()
                 elif e.key == pygame.K_t:
