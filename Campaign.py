@@ -179,6 +179,96 @@ TIMED_MUSIC_MODE = "timedmusic"   # an Extras run that is on the clock
 CREDITS_MODE = "credits"          # the credits roll has its own track
 SECRET_MUSIC_MODE = "secret"      # the hidden playlist, found from the picker
 SHAPES, EXTRAS, CHAOS = "shapes", "extras", "chaos"
+CAMPAIGN = "campaign"
+CAMPAIGN_MUSIC_MODE = "campaignmusic"   # the current area's own tracks
+
+# Ten areas, in order. The name is also the folder looked for inside
+# campaign/ - campaign/Beach/ holds that area's backdrop and music.
+CAMPAIGN_AREAS = (
+    "Beach", "Dock", "City", "Forest", "Mine",
+    "Cave", "Crystal Cavern", "Volcanic Core", "Underground City", "The Deep",
+)
+LEVELS_PER_AREA = 5
+CAMPAIGN_LEVELS = len(CAMPAIGN_AREAS) * LEVELS_PER_AREA
+
+# Objective kinds. Each is a small, legible challenge:
+#   score - reach a score inside a move budget
+#   gems  - clear a number of gems inside a move budget
+#   time  - reach a score before the clock runs out
+GOAL_SCORE, GOAL_GEMS, GOAL_TIME = "score", "gems", "time"
+
+
+# Modifiers thrown into later levels. ZEN is deliberately absent: it turns
+# scoring off, which would make every objective impossible.
+CAMPAIGN_MODIFIERS = ("mono", "boom", "lock", "spotlight", "chaos")
+
+
+def campaign_modifiers(area, step):
+    """Which Extras modifiers a level runs with.
+
+    The first two areas are clean so the basics can be learned. After that a
+    modifier appears on the harder steps of each area, a second one from the
+    Volcanic Core, and The Deep finishes on three at once. Which modifiers
+    appear rotates with the area so the run keeps changing shape.
+    """
+    if area < 2:
+        return ()
+    slots = 1 + (area >= 7) + (area >= 9)
+    # Only the back half of each area carries them, so every area opens with
+    # a clean level before it complicates things.
+    if step < 5 - slots - (0 if area >= 7 else 1):
+        return ()
+    picks = []
+    for i in range(slots):
+        picks.append(CAMPAIGN_MODIFIERS[(area + step + i * 2) % len(CAMPAIGN_MODIFIERS)])
+    return tuple(dict.fromkeys(picks))
+
+
+def campaign_level(number):
+    """The objective for level `number` (1-based, continuous across areas).
+
+    Difficulty is generated rather than hand-listed so the curve stays smooth
+    across all fifty: targets climb with the area while the budget tightens,
+    and the three goal kinds rotate so no area is five of the same task.
+    """
+    number = max(1, min(CAMPAIGN_LEVELS, int(number)))
+    area = (number - 1) // LEVELS_PER_AREA          # 0..9
+    step = (number - 1) % LEVELS_PER_AREA           # 0..4
+    kind = (GOAL_SCORE, GOAL_GEMS, GOAL_SCORE, GOAL_TIME, GOAL_SCORE)[step]
+
+    # Area sets the scale, step raises it within the area.
+    ramp = 1.0 + area * 0.55 + step * 0.16
+    mods = campaign_modifiers(area, step)
+
+    if kind == GOAL_GEMS:
+        target = int(round((26 + area * 7 + step * 4) / 2.0) * 2)
+        budget = max(6, 22 + area - step * 2)
+        return {"kind": kind, "target": target, "moves": budget,
+                "extras": mods,
+                "text": f"CLEAR {target} GEMS IN {budget} MOVES"}
+    if kind == GOAL_TIME:
+        target = int(round(900 * ramp / 50.0) * 50)
+        seconds = max(30, 75 - area * 3)
+        return {"kind": kind, "target": target, "seconds": float(seconds),
+                "extras": mods,
+                "text": f"SCORE {target:,} IN {seconds}S"}
+    target = int(round(700 * ramp / 50.0) * 50)
+    budget = max(5, 20 + area - step * 3)
+    return {"kind": kind, "target": target, "moves": budget,
+            "extras": mods,
+            "text": f"SCORE {target:,} IN {budget} MOVES"}
+
+
+def campaign_modifier_label(goal):
+    """'MONO + COLOR LOCK' for a level's modifiers, or '' if it has none."""
+    names = {k: label for k, label, _ in EXTRA_DEFS}
+    mods = (goal or {}).get("extras", ())
+    return " + ".join(names.get(k, k.upper()) for k in mods)
+
+
+def campaign_area_of(number):
+    return max(0, min(len(CAMPAIGN_AREAS) - 1,
+                      (int(number) - 1) // LEVELS_PER_AREA))
 
 # Extras: modifiers the player can stack. Each is (key, label, blurb).
 EXTRA_DEFS = (
@@ -190,6 +280,13 @@ EXTRA_DEFS = (
     ("chaos",   "CHAOS",          "???"),
 )
 LOCK_SECONDS = 10.0
+# Panel buttons a campaign level takes over, since the area picks both.
+LOCKED_IN_CAMPAIGN = ("BACKGROUNDS", "MUSIC")
+# Row height in the level picker. campaign_rect() and
+# build_campaign_widgets() both derive from this, so it can only be
+# changed in one place.
+CAMPAIGN_ROW_H = 64
+CAMPAIGN_ROW_GAP = 10
 SPOTLIGHT_RADIUS = 132     # lit radius around the cursor, authored px
 SPOTLIGHT_FEATHER = 46     # soft edge on the spotlight, authored px
 
@@ -384,6 +481,7 @@ BACKGROUND_FADE_TIME = 0.8
 UI_DIR = asset_folder("ui")
 CHAOS_DIR = asset_folder("chaos")
 TITLE_DIR = asset_folder("title")
+CAMPAIGN_DIR = asset_folder("campaign")
 CREDITS_DIR = asset_folder("credits")
 
 # Save files now go to Documents/Prismac Saves (cross-platform)
@@ -1956,6 +2054,44 @@ def load_title_art():
     return None
 
 
+def campaign_area_dir(area):
+    """campaign/<Area Name>/, matched case- and punctuation-insensitively so
+    'crystal cavern' and 'CrystalCavern' both work."""
+    if not os.path.isdir(CAMPAIGN_DIR):
+        return None
+    want = _norm(CAMPAIGN_AREAS[area])
+    for name in sorted(os.listdir(CAMPAIGN_DIR)):
+        path = os.path.join(CAMPAIGN_DIR, name)
+        if os.path.isdir(path) and _norm(name) == want:
+            return path
+    return None
+
+
+def load_campaign_background(area):
+    """The backdrop from that area's folder, scaled to cover the layer."""
+    folder = campaign_area_dir(area)
+    if folder is None:
+        return None
+    for filename in sorted(os.listdir(folder)):
+        if os.path.splitext(filename)[1].lower() not in (".png", ".webp",
+                                                         ".jpg", ".jpeg"):
+            continue
+        try:
+            art = pygame.image.load(os.path.join(folder, filename))
+            art = art.convert_alpha() if art.get_alpha() else art.convert()
+        except pygame.error:
+            continue
+        w, h = art.get_size()
+        scale = max(WIDTH / w, HEIGHT / h)        # cover, never squashed
+        art = pygame.transform.smoothscale(
+            art, (int(w * scale + 0.5), int(h * scale + 0.5)))
+        canvas = pygame.Surface((WIDTH, HEIGHT))
+        canvas.blit(art, ((WIDTH - art.get_width()) // 2,
+                          (HEIGHT - art.get_height()) // 2))
+        return canvas
+    return None
+
+
 def load_title_background():
     """title/TitleBackground.* - the backdrop behind the logo."""
     if not os.path.isdir(TITLE_DIR):
@@ -2248,6 +2384,7 @@ class Audio:
         self.title_playlist = []
         self.credits_playlist = []
         self.secret_playlist = []
+        self.campaign_playlist = []
         self.mode = ENDLESS
         self.playlist_started = False
         self.chosen = None          # a track the player picked by hand
@@ -2384,11 +2521,22 @@ class Audio:
         pygame.mixer.music.set_endevent(MUSIC_END)
         self.use_playlist(TITLE)
 
+    def set_campaign_playlist(self, paths):
+        """Point the campaign playlist at one area's folder."""
+        changed = paths != self.campaign_playlist
+        self.campaign_playlist = list(paths)
+        if changed and self.mode == CAMPAIGN_MUSIC_MODE:
+            # Already listening to the old area: restart on the new one
+            self.playlist_started = False
+            self.use_playlist(CAMPAIGN_MUSIC_MODE)
+
     def active_list(self):
         """Falls back to the main playlist if a set is empty, so the game
         never goes silent."""
         if self.mode == SECRET_MUSIC_MODE and self.secret_playlist:
             return self.secret_playlist
+        if self.mode == CAMPAIGN_MUSIC_MODE and self.campaign_playlist:
+            return self.campaign_playlist
         if self.mode == CREDITS_MODE and self.credits_playlist:
             return self.credits_playlist
         if self.mode == TITLE and self.title_playlist:
@@ -2958,6 +3106,17 @@ class Game:
         self.on_title = True
         self.title_ready = False
         self.extras_open = False
+        # Campaign: which level is being played, which area the picker is
+        # showing, and how far the player has got. campaign_unlocked is the
+        # highest level they may start.
+        self.campaign_level_num = 1
+        self.campaign_area = 0
+        self.campaign_unlocked = 1
+        self.campaign_open = False
+        self.campaign_bg = None
+        self.campaign_arrows = []
+        self.campaign_rows = []
+        self.campaign_buttons = []
         self.extras = {k: False for k, _, _ in EXTRA_DEFS}
         self.extra_clock = ENDLESS
         self.extras_note = ""
@@ -3003,6 +3162,7 @@ class Game:
         self.timed_bonus_gems = True
         self.build_widgets()
         self.build_title_widgets()
+        self.build_campaign_widgets()
         self.bg_index_override = None  # track current background override
         self.bg_index = 0  # cached random background index
         self.bg_transition_active = False
@@ -3049,11 +3209,18 @@ class Game:
                   ("EXTRAS", self.open_extras, (176, 140, 240))),
                  (("MENU", self.open_settings, (150, 160, 190)),
                   ("QUIT", self.quit, (232, 92, 92))))
-        self.title_buttons = []
+        # CAMPAIGN sits above the pairs and spans the full width of both
+        # columns, so it reads as the headline mode rather than a sixth
+        # option. Everything else shifts down by one row to make room.
+        top = S(378)
+        self.title_buttons = [
+            Button((cx - w - gap // 2, top, w * 2 + gap, h), "CAMPAIGN",
+                   self.open_campaign, accent=(96, 200, 232)),
+        ]
         for row, pair in enumerate(specs):
             for col, (label, action, accent) in enumerate(pair):
                 x = cx - w - gap // 2 + col * (w + gap)
-                y = S(396) + row * (h + gap)
+                y = top + (row + 1) * (h + gap)
                 self.title_buttons.append(
                     Button((x, y, w, h), label, action, accent=accent))
 
@@ -3076,6 +3243,87 @@ class Game:
             Button((box.x + S(26) + half + S(12), by + S(52), half, S(40)), "PLAY",
                    self.play_extras, accent=(126, 216, 150)),
         ]
+
+    # -- campaign picker ---------------------------------------------------
+
+    @staticmethod
+    def campaign_rect():
+        # Height is derived from what actually goes inside - header, area
+        # name, five rows and the BACK button - rather than guessed, which is
+        # how the last row ended up under the button.
+        rows = (LEVELS_PER_AREA * (S(CAMPAIGN_ROW_H) + S(CAMPAIGN_ROW_GAP))
+                - S(CAMPAIGN_ROW_GAP))
+        height = S(146) + rows + S(18) + S(46) + S(18)
+        width = S(560)
+        return pygame.Rect(WIDTH // 2 - width // 2, HEIGHT // 2 - height // 2,
+                           width, height)
+
+    def build_campaign_widgets(self):
+        box = self.campaign_rect()
+        arrow = S(46)
+        ay = box.y + S(74)
+        self.campaign_arrows = [
+            Button((box.x + S(24), ay, arrow, arrow), "<",
+                   lambda: self.step_area(-1), accent=(96, 200, 232)),
+            Button((box.right - S(24) - arrow, ay, arrow, arrow), ">",
+                   lambda: self.step_area(1), accent=(96, 200, 232)),
+        ]
+        self.campaign_rows = []
+        rw = box.width - S(96)
+        rh = S(CAMPAIGN_ROW_H)
+        for i in range(LEVELS_PER_AREA):
+            self.campaign_rows.append(
+                pygame.Rect(box.x + S(48),
+                            box.y + S(146) + i * (rh + S(CAMPAIGN_ROW_GAP)),
+                            rw, rh))
+        self.campaign_buttons = [
+            Button((box.x + S(48), box.bottom - S(18) - S(46),
+                    box.width - S(96), S(46)), "BACK", self.close_campaign),
+        ]
+
+    def open_campaign(self):
+        self.campaign_open = True
+        self.campaign_area = campaign_area_of(self.campaign_unlocked)
+        self.build_campaign_widgets()
+        self.audio.play("menuclick")
+        self.preview_area()
+
+    def close_campaign(self):
+        self.campaign_open = False
+        self.campaign_bg = None          # back to the title artwork
+        self.audio.use_playlist(TITLE)
+        self.audio.play("menuclick")
+
+    def step_area(self, delta):
+        """Left/right through the ten areas. Stops at the ends rather than
+        wrapping, so the order reads as a journey."""
+        target = self.campaign_area + delta
+        if not 0 <= target < len(CAMPAIGN_AREAS):
+            return
+        self.campaign_area = target
+        self.audio.play("menuclick")
+        self.preview_area()
+
+    def preview_area(self):
+        """Show and play the area being browsed, so the picker sits in the
+        place it is offering rather than on the title backdrop."""
+        self.load_campaign_area(self.campaign_area)
+        self.audio.use_playlist(CAMPAIGN_MUSIC_MODE)
+
+    def campaign_level_at(self, index):
+        """Continuous level number for row `index` of the shown area."""
+        return self.campaign_area * LEVELS_PER_AREA + index + 1
+
+    def start_campaign_level(self, number):
+        if number > self.campaign_unlocked:
+            self.set_note("LOCKED")
+            return
+        self.campaign_level_num = number
+        self.campaign_open = False
+        self.on_title = False
+        self.title_ready = False
+        self.audio.play("menuclick")
+        self.reset(CAMPAIGN)
 
     def ask_wipe(self):
         self.wipe_open = True
@@ -3574,6 +3822,8 @@ class Game:
             self.draw_wipe(screen)
         if self.extras_open:
             self.draw_extras(screen)
+        if self.campaign_open:
+            self.draw_campaign(screen)
         if self.menu_open:
             self.draw_menu(screen)
         if self.wipe_open:
@@ -3584,6 +3834,88 @@ class Game:
                                         GOLD if self.credit_armed else DIM)
         screen.blit(credit, (WIDTH - S(20) - credit.get_width(),
                              HEIGHT - S(20) - credit.get_height()))
+
+    def draw_campaign(self, screen):
+        box = self.campaign_rect()
+        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
+                    box.topleft)
+        title = self.font_big.render("CAMPAIGN", True, TEXT)
+        screen.blit(title, (box.x + S(24), box.y + S(22)))
+        done = self.font_small.render(
+            f"{self.campaign_unlocked - 1}/{CAMPAIGN_LEVELS}", True, DIM)
+        screen.blit(done, (box.right - S(24) - done.get_width(), box.y + S(28)))
+
+        # area name between the arrows
+        name = self.font_big.render(CAMPAIGN_AREAS[self.campaign_area], True,
+                                    (96, 200, 232))
+        screen.blit(name, (box.centerx - name.get_width() // 2,
+                           box.y + S(80)))
+        num = self.font_small.render(
+            f"AREA {self.campaign_area + 1} OF {len(CAMPAIGN_AREAS)}", True, DIM)
+        screen.blit(num, (box.centerx - num.get_width() // 2, box.y + S(112)))
+
+        for i, arrow in enumerate(self.campaign_arrows):
+            # grey the arrow out at either end of the run of areas
+            live = (self.campaign_area > 0) if i == 0 \
+                else (self.campaign_area < len(CAMPAIGN_AREAS) - 1)
+            r = arrow.rect
+            tint = (96, 200, 232) if live else (90, 96, 110)
+            screen.blit(translucent(r.size,
+                                    (255, 255, 255, 30 if live else 12),
+                                    None, S(8)), r.topleft)
+            # The bitmap face has no < or > glyph, so the arrowheads are
+            # drawn rather than typed.
+            w, h = S(11), S(15)
+            if i == 0:
+                pts = [(r.centerx + w // 2, r.centery - h // 2),
+                       (r.centerx + w // 2, r.centery + h // 2),
+                       (r.centerx - w // 2, r.centery)]
+            else:
+                pts = [(r.centerx - w // 2, r.centery - h // 2),
+                       (r.centerx - w // 2, r.centery + h // 2),
+                       (r.centerx + w // 2, r.centery)]
+            pygame.draw.polygon(screen, tint, pts)
+
+        for i, rect in enumerate(self.campaign_rows):
+            number = self.campaign_level_at(i)
+            goal = campaign_level(number)
+            locked = number > self.campaign_unlocked
+            beaten = number < self.campaign_unlocked
+            if locked:
+                fill = (255, 255, 255, 12)
+            elif beaten:
+                fill = (126, 216, 150, 46)
+            else:
+                fill = GOLD + (60,)
+            screen.blit(translucent(rect.size, fill, None, S(8)), rect.topleft)
+
+            label = self.font.render(
+                f"LEVEL {number}", True, (90, 96, 110) if locked else TEXT)
+            screen.blit(label, (rect.x + S(14), rect.y + S(6)))
+            text = "LOCKED" if locked else goal["text"]
+            note = Button.fit(self.font_small, text, rect.width - S(120))
+            screen.blit(note.render(text, True, DIM),
+                        (rect.x + S(14),
+                         rect.y + S(6) + label.get_height() + S(4)))
+            mods = "" if locked else campaign_modifier_label(goal)
+            if mods:
+                # the twist this level adds, in the Extras accent colour
+                chip = Button.fit(self.font_small, mods, rect.width - S(120))
+                screen.blit(chip.render(mods, True, (176, 140, 240)),
+                            (rect.x + S(14), rect.y + S(6)
+                             + label.get_height() + S(4)
+                             + note.get_height() + S(2)))
+            if beaten:
+                tick = self.font.render("CLEAR", True, (126, 216, 150))
+                screen.blit(tick, (rect.right - S(14) - tick.get_width(),
+                                   rect.centery - tick.get_height() // 2))
+            elif not locked:
+                play = self.font.render("PLAY", True, GOLD)
+                screen.blit(play, (rect.right - S(14) - play.get_width(),
+                                   rect.centery - play.get_height() // 2))
+
+        for button in self.campaign_buttons:
+            button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
 
     def draw_extras(self, screen):
         box = self.extras_rect()
@@ -3676,8 +4008,17 @@ class Game:
         self.note_time = 0.0
         self.shape_cells = None
         self.shape_name = None
+        # Campaign run state. goal is None outside campaign runs, which is
+        # what every campaign check keys off.
+        self.goal = campaign_level(self.campaign_level_num) \
+            if self.mode == CAMPAIGN else None
+        self.moves_left = (self.goal or {}).get("moves", 0)
+        self.gems_cleared = 0
+        self.campaign_won = False
         # Use the selected duration for timed mode, otherwise use default
-        if self.timed:
+        if self.mode == CAMPAIGN and self.timed:
+            self.time_left = self.goal["seconds"]
+        elif self.timed:
             self.time_left = self.timed_duration_choice
         else:
             self.time_left = TIMED_SECONDS
@@ -3695,11 +4036,16 @@ class Game:
         self.puffs = []              # smoke left by flame gems
         # While the title screen is up its own track keeps playing; the mode
         # playlist only takes over once a game actually starts.
+        if self.mode == CAMPAIGN:
+            self.load_campaign_area(campaign_area_of(self.campaign_level_num))
         if not self.on_title:
-            # an Extras run with the clock on should still get the timed music
-            self.audio.use_playlist(
-                TIMED_MUSIC_MODE if (self.mode == EXTRAS and self.timed)
-                else self.mode)
+            if self.mode == CAMPAIGN:
+                self.audio.use_playlist(CAMPAIGN_MUSIC_MODE)
+            else:
+                # an Extras run with the clock on still gets the timed music
+                self.audio.use_playlist(
+                    TIMED_MUSIC_MODE if (self.mode == EXTRAS and self.timed)
+                    else self.mode)
         self.new_board()
 
     def apply_extras(self, grid):
@@ -3740,14 +4086,24 @@ class Game:
             return on[0] if len(on) == 1 else f"EXTRAS x{len(on)}"
         if self.mode == SHAPES:
             return "SHAPES"
+        if self.mode == CAMPAIGN:
+            return CAMPAIGN_AREAS[campaign_area_of(self.campaign_level_num)].upper()
         return "TIMED" if self.timed else "ENDLESS"
 
     def extra(self, key):
-        """Is this modifier switched on for the current run?"""
+        """Is this modifier switched on for the current run?
+
+        Campaign levels carry their own set, baked into the objective, so
+        every modifier check works there without any extra plumbing.
+        """
+        if self.mode == CAMPAIGN:
+            return bool(self.goal) and key in self.goal.get("extras", ())
         return self.mode == EXTRAS and self.extras.get(key, False)
 
     @property
     def timed(self):
+        if self.mode == CAMPAIGN:
+            return bool(self.goal and self.goal["kind"] == GOAL_TIME)
         if self.mode == EXTRAS:
             return self.extra_clock == TIMED and not self.extra("zen")
         return self.mode == TIMED
@@ -3835,7 +4191,19 @@ class Game:
         pygame.draw.rect(base, PANEL_EDGE, base.get_rect(), 1, border_radius=14)
         return base
 
+    def load_campaign_area(self, area):
+        """Swap in one area's backdrop and music."""
+        self.campaign_bg = load_campaign_background(area)
+        folder = campaign_area_dir(area)
+        tracks = []
+        if folder:
+            index = Audio.index_folder(folder)
+            tracks = [index[k] for k in sorted(index)]
+        self.audio.set_campaign_playlist(tracks)
+
     def background_for_level(self):
+        if self.mode == CAMPAIGN and self.campaign_bg is not None:
+            return self.campaign_bg
         if not self.backgrounds:
             return None
         if self.bg_index_override is not None:
@@ -4396,7 +4764,7 @@ class Game:
         third = (ow - S(20)) // 2
         self.over_buttons = [
             Button((ox, over.bottom - S(74), third, S(46)), "PLAY AGAIN",
-                   lambda: self.reset(self.mode), accent=(126, 216, 150)),
+                   self.replay_or_advance, accent=(126, 216, 150)),
             Button((ox + third + S(20), over.bottom - S(74), third, S(46)), "TITLE",
                    self.return_to_title, accent=GOLD),
         ]
@@ -4443,8 +4811,20 @@ class Game:
         if self.hint is None:
             self.secret_shuffle()
 
+    def locked_picker(self, label):
+        """Campaign levels supply their own backdrop and music, so those two
+        pickers are switched off for the run rather than silently ignored."""
+        if self.mode != CAMPAIGN:
+            return False
+        area = CAMPAIGN_AREAS[campaign_area_of(self.campaign_level_num)]
+        self.set_note(f"{label} SET BY {area.upper()}")
+        self.audio.play("menuclick")
+        return True
+
     def open_music(self):
         """Song picker. Choosing one plays it, then the shuffle resumes."""
+        if self.locked_picker("MUSIC"):
+            return
         self.music_open = True
         self.menu_open = False
         self.sel = None
@@ -4508,7 +4888,8 @@ class Game:
         aimed at a panel on top of it."""
         return (self.menu_open or self.music_open or self.bg_picker_open
                 or self.extras_open or self.credits_open or self.wipe_open
-                or self.resume_open or self.timed_duration_picker_open)
+                or self.resume_open or self.timed_duration_picker_open
+                or self.campaign_open)
 
     def close_music(self):
         self.music_open = False
@@ -4539,6 +4920,8 @@ class Game:
 
     def open_background_picker(self):
         """Open the background picker dialog."""
+        if self.locked_picker("BACKGROUND"):
+            return
         self.bg_picker_open = True
         self.menu_open = False
         self.sel = None
@@ -4555,6 +4938,32 @@ class Game:
         self.audio.play("menuclick")
 
     # -- saving ------------------------------------------------------------
+
+    def replay_or_advance(self):
+        """PLAY AGAIN retries a failed level, or moves on from a cleared one."""
+        if self.mode == CAMPAIGN and self.campaign_won:
+            if self.campaign_level_num < CAMPAIGN_LEVELS:
+                self.campaign_level_num += 1
+            else:
+                self.return_to_title()      # the run is finished
+                return
+        self.reset(self.mode)
+
+    def save_campaign(self):
+        if self.data_wiped:
+            return
+        data = read_saves()
+        data["campaign"] = {"unlocked": int(self.campaign_unlocked)}
+        write_saves(data)
+
+    def load_campaign(self):
+        entry = read_saves().get("campaign")
+        if isinstance(entry, dict):
+            got = entry.get("unlocked")
+            if isinstance(got, int):
+                self.campaign_unlocked = max(1, min(CAMPAIGN_LEVELS, got))
+        # open the picker on the area they are actually up to
+        self.campaign_area = campaign_area_of(self.campaign_unlocked)
 
     def savable(self):
         """Endless, Shapes and Timed can be resumed. Extras cannot: a run is
@@ -4686,6 +5095,8 @@ class Game:
 
     def return_to_title(self):
         self.save_run()
+        self.campaign_bg = None       # stop showing the area on the title
+        self.campaign_open = False
         self.menu_open = False
         self.music_open = False
         self.over = False
@@ -4768,6 +5179,7 @@ class Game:
                       for _ in range(PARTICLE_COUNT)]
         self.build_widgets()
         self.build_title_widgets()
+        self.build_campaign_widgets()
         self.apply_opacity()
         if self.display is not None:
             self.display.resize_layer()
@@ -4828,6 +5240,19 @@ class Game:
                 if button.hit(pos):
                     return button
             return None
+        if self.on_title and self.campaign_open:
+            for i, rect in enumerate(self.campaign_rows):
+                if rect.collidepoint(pos):
+                    self.start_campaign_level(self.campaign_level_at(i))
+                    return
+            for button in self.campaign_arrows + self.campaign_buttons:
+                if button.hit(pos):
+                    button.down = True
+                    self.audio.play("menuclick")
+                    return
+            if not self.campaign_rect().collidepoint(pos):
+                self.close_campaign()
+            return
         if self.on_title and self.extras_open:
             for button in self.extra_buttons:
                 if button.hit(pos):
@@ -4879,6 +5304,8 @@ class Game:
                     return button
             return None
         for button in self.buttons:
+            if self.mode == CAMPAIGN and button.label in LOCKED_IN_CAMPAIGN:
+                continue          # the area owns these; do not even hover
             if button.hit(pos):
                 return button
         return None
@@ -5031,6 +5458,8 @@ class Game:
                 active = self.resume_buttons
             elif self.wipe_open:
                 active = self.wipe_buttons
+            elif self.campaign_open:
+                active = self.campaign_arrows + self.campaign_buttons
             elif self.extras_open:
                 active = self.extra_buttons
             else:
@@ -5046,6 +5475,7 @@ class Game:
                        + self.extra_buttons + self.duration_buttons
                        + self.credit_buttons + self.music_buttons
                        + self.bg_picker_buttons + self.resume_buttons
+                       + self.campaign_arrows + self.campaign_buttons
                        + self.wipe_buttons):
             button.hover = button in active and button.hit(pos)
 
@@ -5062,6 +5492,7 @@ class Game:
                        + self.extra_buttons + self.scale_buttons
                        + self.setting_buttons + self.credit_buttons
                        + self.resume_buttons + self.wipe_buttons + self.duration_buttons
+                       + self.campaign_arrows + self.campaign_buttons
                        + self.bg_picker_buttons):
             if button.down and button.hit(pos):
                 fired = button
@@ -5462,6 +5893,7 @@ class Game:
                 y = BOARD_Y + int((r + 0.5) * TILE)
                 self.score_pops.append(ScorePop(x, y, bonus))
         self.score += gained
+        self.gems_cleared += len(cells)
 
         self.audio.play_match(self.cascade, self.multi_run)
         for power in spawns.values():
@@ -5523,12 +5955,52 @@ class Game:
             return None
         return detonate(self.grid, spent)
 
+    def campaign_done(self):
+        """Has the objective been met? Checked after every settled move."""
+        goal = self.goal
+        if goal is None:
+            return False
+        if goal["kind"] == GOAL_GEMS:
+            return self.gems_cleared >= goal["target"]
+        return self.score >= goal["target"]
+
+    def check_campaign(self, spent_move):
+        """Win, lose, or carry on. Winning takes priority over running out:
+        landing the target on the final move is a win, not a loss."""
+        if self.mode != CAMPAIGN or self.goal is None or self.over:
+            return
+        if spent_move and self.goal["kind"] != GOAL_TIME:
+            self.moves_left = max(0, self.moves_left - 1)
+        if self.campaign_done():
+            self.win_campaign()
+            return
+        if self.goal["kind"] != GOAL_TIME and self.moves_left <= 0:
+            self.end_game()          # clears the note, so say it afterwards
+            self.set_note("OUT OF MOVES")
+
+    def win_campaign(self):
+        self.campaign_won = True
+        self.unlock_next_level()
+        self.set_note("LEVEL COMPLETE")
+        self.audio.play("levelup")
+        self.over = True
+        self.sel = None
+        self.hint = None
+        self.menu_open = False
+
+    def unlock_next_level(self):
+        nxt = min(CAMPAIGN_LEVELS, self.campaign_level_num + 1)
+        if nxt > self.campaign_unlocked:
+            self.campaign_unlocked = nxt
+            self.save_campaign()
+
     def settle(self):
         self.pair = None
         self.cascade = 0
         # Only a move the player made counts down a fuse. settle() also runs
         # at the end of every cascade step, which would otherwise burn several
         # moves off every bomb for a single swap.
+        spent_move = self.move_pending
         blast = self.tick_bombs() if self.move_pending else None
         self.move_pending = False
         if blast:
@@ -5544,7 +6016,8 @@ class Game:
                 self.hurl_blast(blast, next(iter(self.spent_bombs)))
             self.begin_clear(blast, {})
             return
-        if self.scoring and self.level_progress() >= 1.0:
+        if (self.scoring and self.mode != CAMPAIGN
+                and self.level_progress() >= 1.0):
             self.begin_levelup()
             return
         if not has_move(self.grid):
@@ -5559,6 +6032,8 @@ class Game:
             self.note = "no moves - reshuffled"
             self.audio.play("shuffle")
         self.state = "idle"
+        if self.mode == CAMPAIGN:
+            self.check_campaign(spent_move)
 
     # -- drawing ----------------------------------------------------------
 
@@ -5821,9 +6296,11 @@ class Game:
                         (x, PANEL_Y + S(116)))
             screen.blit(self.font_score.render(f"{secs // 60}:{secs % 60:02d}",
                                                True, color), (x, PANEL_Y + S(138)))
-            screen.blit(self.font_small.render(f"LEVEL {self.level}", True, DIM),
-                        (x, PANEL_Y + S(182)))
-        else:
+            if self.mode != CAMPAIGN:
+                screen.blit(self.font_small.render(f"LEVEL {self.level}",
+                                                   True, DIM),
+                            (x, PANEL_Y + S(182)))
+        elif self.mode != CAMPAIGN:
             screen.blit(self.font_small.render("LEVEL", True, DIM),
                         (x, PANEL_Y + S(116)))
             screen.blit(self.font_score.render(str(self.level), True, TEXT),
@@ -5831,9 +6308,11 @@ class Game:
 
         # The bar always shows progress toward the next level. In timed mode
         # the clock has its own readout above, so mirroring it here left no
-        # indication of how close the next level was.
-        self.bar(screen, x, PANEL_Y + (S(200) if self.timed else S(184)), width, S(10),
-                 self.shown_progress, GOLD)
+        # indication of how close the next level was. Campaign has no levels
+        # to climb - its own objective bar goes here instead.
+        if self.mode != CAMPAIGN:
+            self.bar(screen, x, PANEL_Y + (S(200) if self.timed else S(184)),
+                     width, S(10), self.shown_progress, GOLD)
 
         if self.extra("lock"):
             y = PANEL_Y + S(250)
@@ -5847,8 +6326,7 @@ class Game:
             self.bar(screen, x, y + TILE + S(26), width, S(8),
                      self.lock_left / LOCK_SECONDS, (176, 140, 240))
 
-        mode = self.font_small.render("TIMED" if self.timed else "ENDLESS",
-                                      True, DIM)
+        mode = self.font_small.render(self.mode_label(), True, DIM)
         screen.blit(mode, (PANEL_X + PANEL_W - S(16) - mode.get_width(),
                            PANEL_Y + S(28)))
 
@@ -5865,8 +6343,70 @@ class Game:
                         (x, PANEL_Y + PANEL_H - S(296)))
             self.wrapped(screen, track, x, PANEL_Y + PANEL_H - S(274), width, DIM)
 
+        if self.mode == CAMPAIGN and self.goal is not None:
+            self.draw_objective(screen, x,
+                                PANEL_Y + (S(186) if self.timed else S(116)),
+                                width)
+
         for button in self.buttons:
-            button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
+            if self.mode == CAMPAIGN and button.label in LOCKED_IN_CAMPAIGN:
+                self.draw_locked_button(screen, button)
+            else:
+                button.draw(screen, self.font,
+                            self.hover_lift.get(id(button), 0.0))
+
+    def draw_locked_button(self, screen, button):
+        """A panel button the current mode has taken control of."""
+        screen.blit(translucent(button.rect.size, (255, 255, 255, 10), None,
+                                S(10)), button.rect.topleft)
+        label = Button.fit(self.font, button.label, button.rect.width - S(14))
+        image = label.render(button.label, True, (86, 92, 106))
+        screen.blit(image, image.get_rect(center=button.rect.center))
+
+    def draw_objective(self, screen, x, y, width):
+        """Objective and how far along it is, on the score panel."""
+        goal = self.goal
+        # The badge at the top of the panel already names the area, so this
+        # only needs the level number.
+        head = self.font_small.render(f"LEVEL {self.campaign_level_num}", True,
+                                      (96, 200, 232))
+        screen.blit(head, (x, y))
+        y += head.get_height() + S(6)
+
+        # "SCORE 1,300 IN 15 MOVES" is too wide for the panel in one line, so
+        # it breaks at the IN, which stays on the second line to keep it
+        # reading as one sentence.
+        head_text, _, tail = goal["text"].partition(" IN ")
+        for line in (head_text, f"IN {tail}") if tail else (head_text,):
+            img = Button.fit(self.font_small, line, width)
+            screen.blit(img.render(line, True, TEXT), (x, y))
+            y += img.get_height() + S(3)
+        y += S(5)
+
+        if goal["kind"] == GOAL_GEMS:
+            have, need = self.gems_cleared, goal["target"]
+        else:
+            have, need = self.score, goal["target"]
+        frac = clamp01(have / max(1, need))
+        bar = pygame.Rect(x, y, width, S(6))
+        screen.blit(translucent(bar.size, (255, 255, 255, 38), None, S(3)),
+                    bar.topleft)
+        if frac > 0:
+            screen.blit(translucent((max(S(3), int(width * frac)), bar.height),
+                                    GOLD + (235,), None, S(3)), bar.topleft)
+        y += bar.height + S(6)
+
+        mods = campaign_modifier_label(goal)
+        if mods:
+            self.wrapped(screen, mods, x, y, width, (176, 140, 240))
+            y += self.font_small.get_height() * (
+                1 + (self.font_small.size(mods)[0] > width)) + S(6)
+
+        if goal["kind"] != GOAL_TIME:
+            hot = self.moves_left <= 3
+            left = self.font_small.render(f"{self.moves_left} MOVES LEFT", True,
+                                          (232, 92, 92) if hot else DIM)
+            screen.blit(left, (x, y))
 
     def wrapped(self, screen, text, x, y, width, color):
         """Panel is narrow, so long notes need to wrap rather than overflow."""
@@ -5995,10 +6535,24 @@ class Game:
         screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
                     box.topleft)
 
-        lines = [(self.font_huge, "TIME UP", TEXT, 30),
-                 (self.font_score, f"{self.score:,}", GOLD, 14),
-                 (self.font_small, "POINTS", DIM, 22),
-                 (self.font, f"reached level {self.level}", DIM, 0)]
+        if self.mode == CAMPAIGN and self.goal is not None:
+            area = CAMPAIGN_AREAS[campaign_area_of(self.campaign_level_num)]
+            if self.campaign_won:
+                lines = [(self.font_huge, "COMPLETE", (126, 216, 150), 26),
+                         (self.font_score, f"{self.score:,}", GOLD, 14),
+                         (self.font_small, "POINTS", DIM, 20),
+                         (self.font, f"{area} - level {self.campaign_level_num}",
+                          DIM, 0)]
+            else:
+                lines = [(self.font_huge, "FAILED", (232, 92, 92), 26),
+                         (self.font, self.goal["text"], DIM, 16),
+                         (self.font_score, f"{self.score:,}", GOLD, 14),
+                         (self.font_small, "POINTS", DIM, 0)]
+        else:
+            lines = [(self.font_huge, "TIME UP", TEXT, 30),
+                     (self.font_score, f"{self.score:,}", GOLD, 14),
+                     (self.font_small, "POINTS", DIM, 22),
+                     (self.font, f"reached level {self.level}", DIM, 0)]
         y = box.y + S(34)
         for font, text, color, gap in lines:
             image = font.render(text, True, color)
@@ -6276,12 +6830,16 @@ class Game:
         being baked into the 4:3 layer that gets letterboxed.
         """
         if self.on_title:
+            if self.campaign_open and self.campaign_bg is not None:
+                return self.campaign_bg      # preview the area being browsed
             if self.credits_open:
                 return (self.credits_art.get("background")
                         or self.title_bg
                         or (self.backgrounds[0] if self.backgrounds else None))
             return self.title_bg or (self.backgrounds[0]
                                      if self.backgrounds else None)
+        if self.mode == CAMPAIGN and self.campaign_bg is not None:
+            return self.campaign_bg      # the area's own artwork
         return self.background_for_level()
 
     def draw(self, screen, background=True):
@@ -6724,6 +7282,7 @@ def main():
     game = Game(sprites, audio, effects, backgrounds, skin)
     game.display = display
     game.load_settings()
+    game.load_campaign()
     if game.settings.get("fullscreen") and not display.fullscreen:
         display.set_fullscreen(True, game)
     game.settings["fullscreen"] = display.fullscreen

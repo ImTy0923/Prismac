@@ -79,91 +79,22 @@ except ImportError:
 # --------------------------------------------------------------------------
 
 COLS, ROWS = 9, 9
+TILE = 83
+MARGIN = 27
+GEM_PAD = 3                 # breathing room inside each tile
 
-# --- render scale ---------------------------------------------------------
-# The whole UI is authored at 1080x810 and every pixel number in the layout
-# and drawing code goes through S(). Raising RENDER_SCALE redraws the game
-# into a larger layer - gems, glyphs and panels are all genuinely rendered at
-# that size rather than blown up afterwards, which is the only thing that
-# actually adds detail. Display still fits the layer to the screen, so the
-# picture stays the same size and simply gets sharper.
-BASE_WIDTH, BASE_HEIGHT = 1080, 810
-BASE_TILE = 83
-BASE_MARGIN = 27
-BASE_GEM_PAD = 3
-BASE_PANEL_W = 248
-BASE_PANEL_Y = 30
-BASE_EXTRA_ROW = 52
-BASE_FONTS = {"huge": 7, "score": 5, "big": 3, "body": 2, "small": 2}
-
-RENDER_SCALE = 1.0
-
-
-def S(n):
-    """Scale an authored 1080x810 pixel number to the current render scale."""
-    return int(n * RENDER_SCALE)
-
-
-def font_scale(name):
-    """Pixel-font scale for a role.
-
-    The 5x7 bitmap face only scales in whole numbers - fractional scaling is
-    exactly what makes it mushy - so at 125% and 150% the type cannot land
-    exactly in proportion. Rounding down errs slightly small, which keeps the
-    airy padding the layout was designed around; rounding up left text
-    crowding the edges of its rows. 100% and 200% land exactly either way.
-    """
-    return max(1, int(BASE_FONTS[name] * RENDER_SCALE))
-
-
-WIDTH, HEIGHT = BASE_WIDTH, BASE_HEIGHT
-TILE = BASE_TILE
-MARGIN = BASE_MARGIN
-GEM_PAD = BASE_GEM_PAD
-PANEL_W = BASE_PANEL_W
-PANEL_Y = BASE_PANEL_Y
-EXTRA_ROW = BASE_EXTRA_ROW
-FONT_SCALE = BASE_FONTS["big"]
-
+# 4:3 window with the score panel down the left-hand side.
+WIDTH, HEIGHT = 1080, 810
+PANEL_W = 248
 PANEL_X = MARGIN
+PANEL_Y = 30
 PANEL_H = HEIGHT - PANEL_Y * 2
 BOARD_W = BOARD_H = COLS * TILE
-BOARD_X = PANEL_X + PANEL_W + S(26)
+BOARD_X = PANEL_X + PANEL_W + 26
 BOARD_Y = (HEIGHT - BOARD_H) // 2
 
-
-def apply_render_scale(k):
-    """Recompute every scale-dependent module constant."""
-    global RENDER_SCALE, WIDTH, HEIGHT, TILE, MARGIN, GEM_PAD, PANEL_W
-    global PANEL_Y, EXTRA_ROW, FONT_SCALE, PANEL_X, PANEL_H
-    global BOARD_W, BOARD_H, BOARD_X, BOARD_Y
-    RENDER_SCALE = float(k)
-    WIDTH, HEIGHT = S(BASE_WIDTH), S(BASE_HEIGHT)
-    TILE = S(BASE_TILE)
-    MARGIN = S(BASE_MARGIN)
-    GEM_PAD = max(1, S(BASE_GEM_PAD))
-    PANEL_W = S(BASE_PANEL_W)
-    PANEL_Y = S(BASE_PANEL_Y)
-    EXTRA_ROW = S(BASE_EXTRA_ROW)
-    FONT_SCALE = font_scale("big")
-    PANEL_X = MARGIN
-    PANEL_H = HEIGHT - PANEL_Y * 2
-    BOARD_W = BOARD_H = COLS * TILE
-    BOARD_X = PANEL_X + PANEL_W + S(26)
-    BOARD_Y = (HEIGHT - BOARD_H) // 2
-
-
-# Internal render resolution, offered in fullscreen. Higher settings render
-# more pixels for the same on-screen size, so the picture gets sharper rather
-# than bigger.
-# (factor, label)
-SCALE_OPTIONS = (
-    (1.00, "100%"),
-    (1.25, "125%"),
-    (1.50, "150%"),
-    (2.00, "200%"),
-)
-DEFAULT_RENDER_SCALE = 1.00
+# Pixel type: rendered small with antialiasing off, then scaled up with
+# nearest-neighbour so the edges stay hard. Drop a .ttf in fonts/ to override.
 
 HINT_SECONDS = 4.0          # how long a hint stays lit
 
@@ -177,7 +108,6 @@ LEVEL_GROWTH = 1.35        # each level needs this much more than the last
 ENDLESS, TIMED, TITLE = "endless", "timed", "title"
 TIMED_MUSIC_MODE = "timedmusic"   # an Extras run that is on the clock
 CREDITS_MODE = "credits"          # the credits roll has its own track
-SECRET_MUSIC_MODE = "secret"      # the hidden playlist, found from the picker
 SHAPES, EXTRAS, CHAOS = "shapes", "extras", "chaos"
 
 # Extras: modifiers the player can stack. Each is (key, label, blurb).
@@ -186,12 +116,9 @@ EXTRA_DEFS = (
     ("mono",    "MONO",           "Black & White"),
     ("boom",    "EXPLOSIVES",     "Explosive Gems Spawn Freely"),
     ("lock",    "COLOR LOCK",    "One Color Scores (Swaps Every 10s)"),
-    ("spotlight", "SPOTLIGHT",    "Only A Circle Around Your Cursor"),
     ("chaos",   "CHAOS",          "???"),
 )
 LOCK_SECONDS = 10.0
-SPOTLIGHT_RADIUS = 132     # lit radius around the cursor, authored px
-SPOTLIGHT_FEATHER = 46     # soft edge on the spotlight, authored px
 
 # graphics toggles, both on by default and switchable from the title menu
 SETTING_DEFS = (
@@ -202,11 +129,10 @@ SETTING_DEFS = (
     ("shake",     "CAMERA SHAKE",        "Screen Shakes on Explosions"),
     ("particles", "BACKGROUND PARTICLES", "Small Particle Effects"),
 )
-
-# Resolution options for the game window
-# (width, height, label, description)
-
 PARTICLE_COUNT = 46
+
+# Pixel type: rendered at this scale
+FONT_SCALE = 3
 
 # rainbow gem detonation: a short charge, then the targets zapped one by one
 RAINBOW_CHARGE = 0.55      # hypercube shaking before anything pops
@@ -215,6 +141,8 @@ RAINBOW_TAIL = 0.30        # a beat after the last one
 RAINBOW_MAX = 1.9          # hard ceiling, so a board wipe cannot drag
 CHAIN_STEP = 0.10          # delay between chained explosion steps
 ZAP_EVERY = 2              # play the zap sound on every Nth gem
+EXTRA_ROW = 59             # tall enough for a label and its blurb
+
 # The clock is frozen in all of these: the board is not playable, so running
 # it down would be unfair. It restarts the moment GO! appears.
 PAUSED_STATES = ("intro", "flyoff", "banner", "settling")
@@ -392,7 +320,6 @@ SAVE_FILE = os.path.join(SAVES_DIR, "prismac_save.json")
 SETTINGS_FILE = os.path.join(SAVES_DIR, "prismac_settings.json")
 # "smooth animation" off keeps the same timings but drops the springiness
 WIPE_HOLD = 3.0            # seconds YES must be held to erase save data
-RESUME_HOLD = 1.5          # seconds NO must be held to bin a saved run
 SAVED_MODES = (ENDLESS, SHAPES) if False else ("endless", "shapes")
 
 # The credits roll. ("h", ...) is a heading, ("r", ...) a rule, ("", ...)
@@ -526,10 +453,10 @@ CREDITS_TEXT = (
     ("s", ""), ("s", ""), ("s", ""),
 )
 
-BASE_CREDIT_SPEED = 44     # pixels per second at 100%
+CREDIT_SPEED = 44          # pixels per second
 CREDIT_GEMS = 20           # gems drifting behind the roll
 DEBRIS_MAX = 22            # flying gems on screen at once from explosions
-BASE_CREDIT_LINE = 26
+CREDIT_LINE = 26
 
 # title screen
 TITLE_BOB = 9.0            # pixels the logo drifts up and down
@@ -549,13 +476,11 @@ AUDIO_EXTS = (".ogg", ".wav", ".mp3", ".flac")
 # music/            the endless-mode playlist, shuffled
 # music/Timed Music/ played instead while timed mode is running
 TIMED_MUSIC_SUBDIR = "Timed Music"
-SECRET_MUSIC_SUBDIR = "secret"
-SECRET_TAPS = 5            # taps on the picker title to reveal it
 
 MUSIC_VOLUME = 0.35        # starting music level, 0.0 - 1.0
 SFX_START_VOLUME = 0.8     # starting sound-effect level, 0.0 - 1.0
 VOLUME_STEP = 0.05         # how much the - and = keys move the slider
-BASE_VOL_WIDTH = 150
+VOL_WIDTH = 150
 VOL_HEIGHT = 6
 CASCADE_SEMITONES = 2      # only used to fake a missing CascadeN.ogg
 
@@ -2247,7 +2172,6 @@ class Audio:
         self.timed_playlist = []
         self.title_playlist = []
         self.credits_playlist = []
-        self.secret_playlist = []
         self.mode = ENDLESS
         self.playlist_started = False
         self.chosen = None          # a track the player picked by hand
@@ -2364,19 +2288,12 @@ class Audio:
         self.timed_playlist = [timed_index[key] for key in sorted(timed_index)]
         random.shuffle(self.timed_playlist)
 
-        # music/secret/ - only ever reached through the picker easter egg, so
-        # it is kept in filename order rather than shuffled.
-        secret_dir = os.path.join(MUSIC_DIR, SECRET_MUSIC_SUBDIR)
-        secret_index = self.index_folder(secret_dir)
-        self.secret_playlist = [secret_index[key] for key in sorted(secret_index)]
-
         if not self.playlist:
             self.missing.append("music (nothing in music/)")
         if not self.title_playlist:
             self.missing.append("title music (nothing in title/)")
         if not self.timed_playlist:
             self.missing.append(f"timed music (nothing in {TIMED_MUSIC_SUBDIR}/)")
-        # secret/ is optional and silent about being empty - that is the point
         if not self.playlist and not self.timed_playlist:
             return
 
@@ -2387,8 +2304,6 @@ class Audio:
     def active_list(self):
         """Falls back to the main playlist if a set is empty, so the game
         never goes silent."""
-        if self.mode == SECRET_MUSIC_MODE and self.secret_playlist:
-            return self.secret_playlist
         if self.mode == CREDITS_MODE and self.credits_playlist:
             return self.credits_playlist
         if self.mode == TITLE and self.title_playlist:
@@ -2786,9 +2701,7 @@ class FlyingGem:
 class ScrollList:
     """A scrollable list of rows. Used for the music picker."""
 
-    @property
-    def ROW(self):
-        return S(34)
+    ROW = 34
 
     def __init__(self, rect):
         self.rect = pygame.Rect(rect)
@@ -2814,7 +2727,7 @@ class ScrollList:
         return row if 0 <= row < len(self.items) else -1
 
     def draw(self, screen, font):
-        screen.blit(translucent(self.rect.size, (255, 255, 255, 16), None, S(8)),
+        screen.blit(translucent(self.rect.size, (255, 255, 255, 16), None, 8),
                     self.rect.topleft)
         clip = screen.get_clip()
         screen.set_clip(self.rect)
@@ -2822,17 +2735,17 @@ class ScrollList:
         for i in range(top, min(len(self.items), top + self.visible + 1)):
             y = self.rect.y + (i - top) * self.ROW
             if i == self.current:
-                screen.blit(translucent((self.rect.width, self.ROW - S(2)),
-                                        GOLD + (70,), None, S(6)),
+                screen.blit(translucent((self.rect.width, self.ROW - 2),
+                                        GOLD + (70,), None, 6),
                             (self.rect.x, y))
             elif i == self.hover:
-                screen.blit(translucent((self.rect.width, self.ROW - S(2)),
-                                        (255, 255, 255, 34), None, S(6)),
+                screen.blit(translucent((self.rect.width, self.ROW - 2),
+                                        (255, 255, 255, 34), None, 6),
                             (self.rect.x, y))
             colour = GOLD if i == self.current else TEXT
-            label = Button.fit(font, self.items[i], self.rect.width - S(20))
+            label = Button.fit(font, self.items[i], self.rect.width - 20)
             image = label.render(self.items[i], True, colour)
-            screen.blit(image, (self.rect.x + S(10),
+            screen.blit(image, (self.rect.x + 10,
                                 y + (self.ROW - image.get_height()) // 2))
         screen.set_clip(clip)
 
@@ -2840,8 +2753,8 @@ class ScrollList:
         if self.max_offset() > 0:
             span = self.rect.height * self.visible / len(self.items)
             pos = (self.rect.height - span) * self.offset / self.max_offset()
-            screen.blit(translucent((S(4), int(span)), (255, 255, 255, 110), None, S(2)),
-                        (self.rect.right - S(6), self.rect.y + int(pos)))
+            screen.blit(translucent((4, int(span)), (255, 255, 255, 110), None, 2),
+                        (self.rect.right - 6, self.rect.y + int(pos)))
 
 
 class Button:
@@ -2875,7 +2788,7 @@ class Button:
         """`lift` (0..1) eases the button up a couple of pixels and widens it
         slightly on hover. It is passed as 0 when smooth animation is off, so
         the button is drawn exactly where it always was."""
-        font = self.fit(font, self.label, self.rect.width - S(14))
+        font = self.fit(font, self.label, self.rect.width - 14)
         if self.down and self.hover:
             fill = BTN_DOWN
         elif self.hover:
@@ -2884,13 +2797,13 @@ class Button:
             fill = BTN
         rect = self.rect
         if lift > 0.01:
-            grow = int(round(S(4) * lift))
-            rect = self.rect.inflate(grow, grow).move(0, -int(round(S(2) * lift)))
-        screen.blit(translucent(rect.size, fill, PANEL_EDGE, S(10)), rect.topleft)
+            grow = int(round(4 * lift))
+            rect = self.rect.inflate(grow, grow).move(0, -int(round(2 * lift)))
+        screen.blit(translucent(rect.size, fill, PANEL_EDGE, 10), rect.topleft)
         if self.accent:
             pygame.draw.rect(screen, self.accent,
-                             (rect.x, rect.y + S(8), S(3), rect.height - S(16)),
-                             border_radius=S(2))
+                             (rect.x, rect.y + 8, 3, rect.height - 16),
+                             border_radius=2)
         text = font.render(self.label, True, TEXT if self.hover else (206, 212, 228))
         screen.blit(text, text.get_rect(center=rect.center))
 
@@ -2913,10 +2826,9 @@ class Slider:
     def draw(self, screen, font, small, dragging=False):
         value = clamp01(self.get())
         label = small.render(self.label, True, DIM)
-        screen.blit(label, (self.rect.x, self.rect.y - small.get_height() - S(8)))
+        screen.blit(label, (self.rect.x, self.rect.y - 24))
         pct = small.render(f"{int(round(value * 100))}%", True, DIM)
-        screen.blit(pct, (self.rect.right - pct.get_width(),
-                          self.rect.y - pct.get_height() - S(8)))
+        screen.blit(pct, (self.rect.right - pct.get_width(), self.rect.y - 24))
 
         screen.blit(translucent(self.rect.size, (255, 255, 255, 38), None,
                                 self.rect.height // 2), self.rect.topleft)
@@ -2929,7 +2841,7 @@ class Slider:
                             self.rect.topleft)
         knob = self.rect.x + int(self.rect.width * value)
         pygame.draw.circle(screen, TEXT, (knob, self.rect.centery),
-                           S(9) if dragging else S(8))
+                           9 if dragging else 8)
 
 
 class Game:
@@ -2976,12 +2888,6 @@ class Game:
         self.data_wiped = False
         self.wipe_open = False
         self.wipe_held = 0.0
-        self.fresh_held = 0.0
-        # Where the spotlight sits. draw() gets no pointer, so on_motion
-        # keeps this current; the board centre is a sane opening position.
-        self.mouse = (BOARD_X + BOARD_W // 2, BOARD_Y + BOARD_H // 2)
-        self._spot_hole = None
-        self._spot_mask = None      # NO on the continue prompt
         self.credit_scroll = 0.0
         self.credits_art = load_credits_art()
         self.motes = [[random.uniform(0, WIDTH), random.uniform(0, HEIGHT),
@@ -2997,7 +2903,11 @@ class Game:
         self.mode = ENDLESS
         self.audio = audio if audio is not None else Audio.silent()
         # scale = device pixels per font pixel, so glyphs are 7*scale tall
-        self.build_fonts()
+        self.font_huge = load_font(7, bold=True)   # 49px
+        self.font_score = load_font(5, bold=True)  # 35px
+        self.font_big = load_font(3, bold=True)    # 21px
+        self.font = load_font(2)                   # 14px
+        self.font_small = load_font(2)
         self.timed_duration_picker_open = False
         self.timed_duration_choice = 90.0  # default 1:30
         self.timed_bonus_gems = True
@@ -3013,21 +2923,12 @@ class Game:
         self.note_time = 0.0  # timer for note fade in/out
         self.reset()
 
-    def build_fonts(self):
-        """(Re)build the type at the current render scale. Whole-number scales
-        keep the 5x7 bitmap face crisp instead of interpolated."""
-        self.font_huge = load_font(font_scale("huge"), bold=True)
-        self.font_score = load_font(font_scale("score"), bold=True)
-        self.font_big = load_font(font_scale("big"), bold=True)
-        self.font = load_font(font_scale("body"))
-        self.font_small = load_font(font_scale("small"))
-
     def build_title(self):
         """Title art with a soft dark halo, so it reads on any background."""
         art = load_title_art()
         if art is None:
             return None
-        pad = S(16)
+        pad = 16
         out = pygame.Surface((art.get_width() + pad * 2,
                               art.get_height() + pad * 2), pygame.SRCALPHA)
         shade = art.copy()
@@ -3042,7 +2943,7 @@ class Game:
 
     def build_title_widgets(self):
         cx = WIDTH // 2
-        w, h, gap = S(250), S(52), S(12)
+        w, h, gap = 250, 52, 12
         specs = ((("ENDLESS", lambda: self.ask_resume(ENDLESS), GOLD),
                   ("TIMED", lambda: self.ask_resume(TIMED), (126, 216, 150))),
                  (("SHAPES", lambda: self.ask_resume(SHAPES), (232, 150, 96)),
@@ -3053,7 +2954,7 @@ class Game:
         for row, pair in enumerate(specs):
             for col, (label, action, accent) in enumerate(pair):
                 x = cx - w - gap // 2 + col * (w + gap)
-                y = S(396) + row * (h + gap)
+                y = 396 + row * (h + gap)
                 self.title_buttons.append(
                     Button((x, y, w, h), label, action, accent=accent))
 
@@ -3062,18 +2963,18 @@ class Game:
         self.extra_rows = []
         for i, (key, label, blurb) in enumerate(EXTRA_DEFS):
             self.extra_rows.append(
-                (key, pygame.Rect(box.x + S(26), box.y + S(70) + i * EXTRA_ROW,
-                                  box.width - S(52), EXTRA_ROW - S(6)), label, blurb))
-        half = (box.width - S(52) - S(12)) // 2
-        by = box.y + S(70) + len(EXTRA_DEFS) * EXTRA_ROW + S(12)
+                (key, pygame.Rect(box.x + 26, box.y + 70 + i * EXTRA_ROW,
+                                  box.width - 52, EXTRA_ROW - 6), label, blurb))
+        half = (box.width - 52 - 12) // 2
+        by = box.y + 70 + len(EXTRA_DEFS) * EXTRA_ROW + 12
         self.extra_buttons = [
-            Button((box.x + S(26), by, half, S(40)), "ENDLESS",
+            Button((box.x + 26, by, half, 40), "ENDLESS",
                    lambda: self.set_extra_clock(ENDLESS), accent=GOLD),
-            Button((box.x + S(26) + half + S(12), by, half, S(40)), "TIMED",
+            Button((box.x + 26 + half + 12, by, half, 40), "TIMED",
                    lambda: self.set_extra_clock(TIMED), accent=(126, 216, 150)),
-            Button((box.x + S(26), by + S(52), half, S(40)), "BACK",
+            Button((box.x + 26, by + 52, half, 40), "BACK",
                    self.close_extras),
-            Button((box.x + S(26) + half + S(12), by + S(52), half, S(40)), "PLAY",
+            Button((box.x + 26 + half + 12, by + 52, half, 40), "PLAY",
                    self.play_extras, accent=(126, 216, 150)),
         ]
 
@@ -3111,7 +3012,7 @@ class Game:
 
     @staticmethod
     def wipe_rect():
-        return pygame.Rect(WIDTH // 2 - S(210), HEIGHT // 2 - S(110), S(420), S(220))
+        return pygame.Rect(WIDTH // 2 - 210, HEIGHT // 2 - 110, 420, 220)
 
     def update_wipe(self, dt, held):
         """YES has to be held down for WIPE_HOLD seconds."""
@@ -3126,12 +3027,12 @@ class Game:
 
     def draw_wipe(self, screen):
         box = self.wipe_rect()
-        screen.blit(translucent(box.size, DIALOG_FILL, (232, 92, 92, 250), S(16)),
+        screen.blit(translucent(box.size, DIALOG_FILL, (232, 92, 92, 250), 16),
                     box.topleft)
         lines = [(self.font_big, "ERASE ALL SAVE DATA?", (255, 140, 140)),
                  (self.font_small, "SAVED RUNS AND SETTINGS", DIM),
                  (self.font_small, "HOLD YES TO CONFIRM", DIM)]
-        y = box.y + S(24)
+        y = box.y + 24
         for font, text, colour in lines:
             img = font.render(text, True, colour)
             screen.blit(img, (box.centerx - img.get_width() // 2, y))
@@ -3153,7 +3054,7 @@ class Game:
 
     @staticmethod
     def resume_rect():
-        return pygame.Rect(WIDTH // 2 - S(210), HEIGHT // 2 - S(110), S(420), S(220))
+        return pygame.Rect(WIDTH // 2 - 210, HEIGHT // 2 - 110, 420, 220)
 
     def ask_resume(self, mode):
         """Offer to continue a saved run, or start fresh and bin the save."""
@@ -3162,49 +3063,29 @@ class Game:
             return
         self.resume_mode = mode
         self.resume_open = True
-        self.fresh_held = 0.0
         self.audio.play("menuclick")
 
     def do_resume(self):
         self.resume_open = False
-        self.fresh_held = 0.0
         self.resume_run(self.resume_mode)
 
     def do_fresh(self):
         """NO wipes the save, as asked - a fresh run replaces it."""
         self.resume_open = False
-        self.fresh_held = 0.0
         self.clear_save(self.resume_mode)
         self.start_game(self.resume_mode)
 
-    def update_resume(self, dt, held):
-        """NO has to be held for RESUME_HOLD seconds.
-
-        Continuing is the safe answer and stays a single click; it is only
-        throwing the run away that asks for a deliberate press. The meter
-        drains faster than it fills, so letting go part-way clearly resets.
-        """
-        if not self.resume_open:
-            return
-        if held:
-            self.fresh_held += dt
-            if self.fresh_held >= RESUME_HOLD:
-                self.do_fresh()
-        else:
-            self.fresh_held = max(0.0, self.fresh_held - dt * 2.5)
-
     def draw_resume(self, screen):
         box = self.resume_rect()
-        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
+        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, 16),
                     box.topleft)
         entry = read_saves().get(self.resume_mode) or {}
         lines = [(self.font_big, "CONTINUE?", TEXT),
                  (self.font_small,
                   f"{self.resume_mode.upper()}  LEVEL {entry.get('level', 1)}"
                   f"  {int(entry.get('score', 0)):,} PTS", DIM),
-                 (self.font_small, "HOLD NO TO START OVER", DIM),
                  ]
-        y = box.y + S(26)
+        y = box.y + 26
         for font, text, colour in lines:
             img = font.render(text, True, colour)
             screen.blit(img, (box.centerx - img.get_width() // 2, y))
@@ -3212,30 +3093,18 @@ class Game:
         for button in self.resume_buttons:
             button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
 
-        # NO fills up as it is held, the same language the wipe prompt uses
-        no = self.resume_buttons[1]
-        frac = clamp01(self.fresh_held / RESUME_HOLD)
-        if frac > 0:
-            width = int(no.rect.width * frac)
-            if width > S(2):
-                screen.blit(translucent((width, no.rect.height),
-                                        (232, 92, 92, 245), None, S(10)),
-                            no.rect.topleft)
-                label = self.font.render("NO", True, TEXT)
-                screen.blit(label, label.get_rect(center=no.rect.center))
-
     def draw_duration_picker(self, screen):
         box = self.duration_picker_rect()
-        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
+        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, 16),
                     box.topleft)
         title = self.font_big.render("SELECT DURATION", True, TEXT)
-        screen.blit(title, (box.centerx - title.get_width() // 2, box.y + S(20)))
+        screen.blit(title, (box.centerx - title.get_width() // 2, box.y + 20))
         for button in self.duration_buttons:
             button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
 
     @staticmethod
     def settings_rect():
-        return pygame.Rect(WIDTH // 2 - S(240), S(128), S(480), S(452))
+        return pygame.Rect(WIDTH // 2 - 240, 128, 480, 452)
 
     def spawn_credit_gems(self):
         """Gems drifting behind the credits roll.
@@ -3304,8 +3173,8 @@ class Game:
         """Hit area for the credit line at the bottom right of the title."""
         text = self.credit_label()
         image = self.font_small.render(text, True, DIM)
-        return pygame.Rect(WIDTH - S(20) - image.get_width(),
-                           HEIGHT - S(22) - image.get_height(),
+        return pygame.Rect(WIDTH - 20 - image.get_width(),
+                           HEIGHT - 22 - image.get_height(),
                            image.get_width(), image.get_height()).inflate(16, 12)
 
     def credit_label(self):
@@ -3314,7 +3183,7 @@ class Game:
     def logo_block(self):
         """Height the logo occupies at the top of the roll."""
         logo = self.credits_art.get("logo")
-        return (logo.get_height() + S(46)) if logo is not None else 0
+        return (logo.get_height() + 46) if logo is not None else 0
 
     def start_scroll(self):
         """Scroll position that leaves the logo centred on screen."""
@@ -3323,7 +3192,7 @@ class Game:
         return HEIGHT - (HEIGHT // 2 - h // 2)
 
     def credits_height(self):
-        return self.logo_block() + len(CREDITS_TEXT) * S(BASE_CREDIT_LINE) + HEIGHT
+        return self.logo_block() + len(CREDITS_TEXT) * CREDIT_LINE + HEIGHT
 
     def draw_credits(self, screen, background=True):
         art = self.credits_art.get("background")
@@ -3343,7 +3212,7 @@ class Game:
 
         y = top + self.logo_block()
         for kind, text in CREDITS_TEXT:
-            if -S(40) < y < HEIGHT + S(40) and text:
+            if -40 < y < HEIGHT + 40 and text:
                 if kind == "t":
                     img = self.font_score.render(text, True, GOLD)
                 elif kind == "h":
@@ -3353,10 +3222,10 @@ class Game:
                 else:
                     img = self.font_small.render(text, True, DIM)
                 screen.blit(img, (cx - img.get_width() // 2, int(y)))
-            elif kind == "r" and -S(40) < y < HEIGHT + S(40):
+            elif kind == "r" and -40 < y < HEIGHT + 40:
                 pygame.draw.rect(screen, PANEL_EDGE[:3],
-                                 (cx - S(150), int(y) + S(6), S(300), max(1, S(2))))
-            y += S(BASE_CREDIT_LINE)
+                                 (cx - 150, int(y) + 6, 300, 2))
+            y += CREDIT_LINE
 
         for button in self.credit_buttons:
             button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
@@ -3395,10 +3264,6 @@ class Game:
             for key, _, _ in SETTING_DEFS:
                 if isinstance(stored.get(key), bool):
                     self.settings[key] = stored[key]
-            rs = stored.get("render_scale")
-            if isinstance(rs, (int, float)) and any(
-                    abs(rs - f) < 0.01 for f, _ in SCALE_OPTIONS):
-                self.settings["render_scale"] = float(rs)
         self.apply_opacity()
         if isinstance(data.get("music"), (int, float)):
             self.audio.set_music_volume(float(data["music"]))
@@ -3425,17 +3290,6 @@ class Game:
         if key == "fullscreen" and self.display is not None:
             surface = self.display.toggle_with(self)
             self.settings[key] = bool(surface.get_flags() & pygame.FULLSCREEN)
-            # Windowed mode opens a real WIDTH x HEIGHT window, so a 2x layer
-            # would ask for a 2160x1620 window and overflow the monitor. Drop
-            # to 1:1 on the way out and restore the choice on the way back in.
-            if self.settings[key]:
-                want = self.settings.get("render_scale", DEFAULT_RENDER_SCALE)
-                if abs(want - RENDER_SCALE) > 0.01:
-                    self.apply_scale(want)
-            elif abs(RENDER_SCALE - 1.0) > 0.01:
-                self.rebuild_at_scale(1.0)
-            if self.menu_open:
-                self.build_scale_buttons()  # rebuild for new fullscreen state
             self.audio.play("menuclick")
             self.save_settings()      # this return used to skip the write
             return
@@ -3450,7 +3304,7 @@ class Game:
 
     @staticmethod
     def extras_rect():
-        return pygame.Rect(WIDTH // 2 - S(250), S(96), S(500), S(540))
+        return pygame.Rect(WIDTH // 2 - 250, 96, 500, 540)
 
     def open_extras(self):
         self.extras_open = True
@@ -3536,24 +3390,24 @@ class Game:
                 halo.fill(tuple(int(c * 255) for c in shade)
                           + (int((70 + 95 * glow) * (1.0 - i * 0.35)),),
                           special_flags=pygame.BLEND_RGBA_MULT)
-                screen.blit(halo, halo.get_rect(center=(WIDTH // 2, S(148) + bob)),
+                screen.blit(halo, halo.get_rect(center=(WIDTH // 2, 148 + bob)),
                             special_flags=pygame.BLEND_RGBA_ADD)
-            screen.blit(art, art.get_rect(center=(WIDTH // 2, S(148) + bob)))
+            screen.blit(art, art.get_rect(center=(WIDTH // 2, 148 + bob)))
         else:
             big = self.font_huge.render("PRISMAC", True, TEXT)
-            screen.blit(big, big.get_rect(center=(WIDTH // 2, S(148))))
+            screen.blit(big, big.get_rect(center=(WIDTH // 2, 148)))
 
         if self.title_ready:
             label = self.font_big.render("CHOOSE A MODE", True, (255,255,255))
             # sits clear above the first row of buttons (y=396)
-            screen.blit(label, label.get_rect(center=(WIDTH // 2, S(362))))
+            screen.blit(label, label.get_rect(center=(WIDTH // 2, 362)))
             for button in self.title_buttons:
                 button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
         else:
             pulse = 0.5 + 0.5 * math.sin(self.time * 3.0)
             prompt = self.font_big.render("CLICK TO START", True, TEXT)
             prompt.set_alpha(int(120 + 135 * pulse))
-            screen.blit(prompt, prompt.get_rect(center=(WIDTH // 2, S(470))))
+            screen.blit(prompt, prompt.get_rect(center=(WIDTH // 2, 470)))
 
         # Darken the title art itself. A translucent veil blitted onto this
         # SRCALPHA layer does not composite reliably, so this multiplies the
@@ -3582,38 +3436,38 @@ class Game:
 
         credit = self.font_small.render(self.credit_label(), True,
                                         GOLD if self.credit_armed else DIM)
-        screen.blit(credit, (WIDTH - S(20) - credit.get_width(),
-                             HEIGHT - S(20) - credit.get_height()))
+        screen.blit(credit, (WIDTH - 20 - credit.get_width(),
+                             HEIGHT - 20 - credit.get_height()))
 
     def draw_extras(self, screen):
         box = self.extras_rect()
-        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
+        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, 16),
                     box.topleft)
         title = self.font_big.render("EXTRAS", True, TEXT)
-        screen.blit(title, (box.x + S(26), box.y + S(24)))
+        screen.blit(title, (box.x + 26, box.y + 24))
         hint = self.font_small.render("PICK ANY", True, DIM)
-        screen.blit(hint, (box.right - S(26) - hint.get_width(), box.y + S(30)))
+        screen.blit(hint, (box.right - 26 - hint.get_width(), box.y + 30))
 
         for key, rect, label, blurb in self.extra_rows:
             on = self.extras.get(key, False)
             screen.blit(translucent(rect.size,
                                     GOLD + (60,) if on else (255, 255, 255, 18),
-                                    None, S(8)), rect.topleft)
-            tick = pygame.Rect(rect.x + S(8), rect.centery - S(10), S(20), S(20))
-            pygame.draw.rect(screen, TEXT if on else DIM, tick, max(1, S(2)),
-                             border_radius=S(4))
+                                    None, 8), rect.topleft)
+            tick = pygame.Rect(rect.x + 8, rect.centery - 10, 20, 20)
+            pygame.draw.rect(screen, TEXT if on else DIM, tick, 2,
+                             border_radius=4)
             if on:
-                pygame.draw.line(screen, GOLD, (tick.x + S(4), tick.centery),
-                                 (tick.centerx, tick.bottom - S(5)), S(3))
-                pygame.draw.line(screen, GOLD, (tick.centerx, tick.bottom - S(5)),
-                                 (tick.right - S(3), tick.y + S(3)), S(3))
+                pygame.draw.line(screen, GOLD, (tick.x + 4, tick.centery),
+                                 (tick.centerx, tick.bottom - 5), 3)
+                pygame.draw.line(screen, GOLD, (tick.centerx, tick.bottom - 5),
+                                 (tick.right - 3, tick.y + 3), 3)
             # label on top, blurb on its own line underneath - a pixel font
             # is far too wide to fit both side by side
             name = self.font.render(label, True, TEXT if on else DIM)
-            screen.blit(name, (rect.x + S(38), rect.y + S(5)))
-            note_font = Button.fit(self.font_small, blurb, rect.width - S(46))
+            screen.blit(name, (rect.x + 38, rect.y + 5))
+            note_font = Button.fit(self.font_small, blurb, rect.width - 46)
             note = note_font.render(blurb, True, DIM)
-            screen.blit(note, (rect.x + S(38), rect.y + S(5) + name.get_height() + S(4)))
+            screen.blit(note, (rect.x + 38, rect.y + 5 + name.get_height() + 4))
 
         zen = self.extras.get("zen")
         for button in self.extra_buttons:
@@ -3623,13 +3477,13 @@ class Game:
             button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
         if zen:
             lock = self.font_small.render("ZEN IS ALWAYS ENDLESS", True, DIM)
-            screen.blit(lock, (box.x + S(26), self.extra_buttons[0].rect.y - S(18)))
+            screen.blit(lock, (box.x + 26, self.extra_buttons[0].rect.y - 18))
         note = self.font_small.render("EXTRAS RUNS ARE NOT SAVED", True, DIM)
         screen.blit(note, (box.centerx - note.get_width() // 2,
-                           box.bottom - S(26)))
+                           box.bottom - 26))
         if self.extras_note:
             warn = self.font_small.render(self.extras_note, True, (255, 150, 150))
-            screen.blit(warn, (box.x + S(26), box.bottom - S(44)))
+            screen.blit(warn, (box.x + 26, box.bottom - 44))
 
     def reset(self, mode=None):
         if mode is not None:
@@ -3640,8 +3494,6 @@ class Game:
         self.level_floor = 0          # score at which the current level began
         self.menu_open = False
         self.music_open = False
-        self.music_secret = False   # picker showing the hidden folder
-        self.music_title_taps = 0   # taps on the picker title
         self.dragging = None
         self.wants_quit = False
         self.hint = None
@@ -3789,7 +3641,7 @@ class Game:
         art = pygame.transform.smoothscale(
             art, (target, max(1, int(h * target / w))))
 
-        pad = S(14)
+        pad = 14
         out = pygame.Surface((art.get_width() + pad * 2,
                               art.get_height() + pad * 2), pygame.SRCALPHA)
         shadow = art.copy()
@@ -3820,7 +3672,7 @@ class Game:
         With ui/board.png present that artwork is the board and the checker
         pattern is dropped - a texture and a checkerboard fight each other.
         """
-        base = translucent((BOARD_W, BOARD_H), BOARD_FILL, None, S(14))
+        base = translucent((BOARD_W, BOARD_H), BOARD_FILL, None, 14)
         checker = pygame.Surface((BOARD_W, BOARD_H), pygame.SRCALPHA)
         for r in range(ROWS):
             for c in range(COLS):
@@ -4239,88 +4091,79 @@ class Game:
     # -- widgets ----------------------------------------------------------
 
     def build_widgets(self):
-        x = PANEL_X + S(16)
-        w = PANEL_W - S(32)
-        bottom = PANEL_Y + PANEL_H - S(16)
+        x = PANEL_X + 16
+        w = PANEL_W - 32
+        bottom = PANEL_Y + PANEL_H - 16
         self.buttons = [
-            Button((x, bottom - S(46) * 4 - S(30), w, S(46)), "HINT",
+            Button((x, bottom - 46 * 4 - 30, w, 46), "HINT",
                    self.show_hint, accent=HINT_COLOR),
-            Button((x, bottom - S(46) * 3 - S(20), w, S(46)), "BACKGROUNDS",
+            Button((x, bottom - 46 * 3 - 20, w, 46), "BACKGROUNDS",
                    self.open_background_picker, accent=(176, 140, 240)),
-            Button((x, bottom - S(46) * 2 - S(10), w, S(46)), "MUSIC",
+            Button((x, bottom - 46 * 2 - 10, w, 46), "MUSIC",
                    self.open_music, accent=(150, 160, 190)),
-            Button((x, bottom - S(46), w, S(46)), "MENU", self.open_menu),
+            Button((x, bottom - 46, w, 46), "MENU", self.open_menu),
         ]
 
         box = self.menu_rect()
-        sx, sw = box.x + S(30), box.width - S(60)
+        sx, sw = box.x + 30, box.width - 60
         self.sliders = [
-            Slider((sx, box.y + S(104), sw, S(8)), "MUSIC",
+            Slider((sx, box.y + 104, sw, 8), "MUSIC",
                    lambda: self.audio.music_volume, self.audio.set_music_volume),
-            Slider((sx, box.y + S(168), sw, S(8)), "SOUND EFFECTS",
+            Slider((sx, box.y + 168, sw, 8), "SOUND EFFECTS",
                    lambda: self.audio.sfx_volume, self.audio.set_sfx_volume),
         ]
         # graphics toggles sit between the sliders and the buttons
         self.setting_rows = []
         for i, (key, label, blurb) in enumerate(SETTING_DEFS):
             self.setting_rows.append(
-                (key, pygame.Rect(sx, box.y + S(226) + i * EXTRA_ROW,
-                                  sw, EXTRA_ROW - S(6)), label, blurb))
+                (key, pygame.Rect(sx, box.y + 226 + i * EXTRA_ROW,
+                                  sw, EXTRA_ROW - 6), label, blurb))
         self.setting_buttons = []
 
-        # Zoom chips, built on demand and only while fullscreen. The band they
-        # sit in is reserved unconditionally so the buttons underneath keep one
-        # fixed home - moving them around was what broke their hitboxes.
-        self.scale_buttons = []
-        self.scale_band_y = self.setting_rows[-1][1].bottom + S(34)
-        self.scale_band_h = S(42)
-
-        half = (sw - S(20)) // 2
-        below = self.scale_band_y + self.scale_band_h
+        half = (sw - 20) // 2
+        below = self.setting_rows[-1][1].bottom
         # RETURN TO TITLE gets the full width and a taller box - it is the
         # one people reach for most
         self.menu_buttons = [
             # RESUME and QUIT share a row; the bottom button changes with
             # context - RETURN TO TITLE SCREEN in a game, RESET DATA on the
             # title screen, where wiping saves actually belongs.
-            Button((sx, below + S(18), half, S(52)), "RESUME", self.close_menu,
+            Button((sx, below + 18, half, 52), "RESUME", self.close_menu,
                    accent=(126, 216, 150)),
-            Button((sx + half + S(20), below + S(18), half, S(52)), "QUIT", self.quit,
+            Button((sx + half + 20, below + 18, half, 52), "QUIT", self.quit,
                    accent=(232, 92, 92)),
-            Button((sx, below + S(82), sw, S(52)), "RETURN TO TITLE SCREEN",
+            Button((sx, below + 82, sw, 52), "RETURN TO TITLE SCREEN",
                    self.return_to_title, accent=GOLD),
         ]
 
         wbox = self.wipe_rect()
-        whalf = (wbox.width - S(72)) // 2
+        whalf = (wbox.width - 72) // 2
         self.wipe_buttons = [
-            Button((wbox.x + S(30), wbox.bottom - S(66), whalf, S(46)), "YES",
+            Button((wbox.x + 30, wbox.bottom - 66, whalf, 46), "YES",
                    lambda: None, accent=(232, 92, 92)),
-            Button((wbox.x + S(42) + whalf, wbox.bottom - S(66), whalf, S(46)), "NO",
+            Button((wbox.x + 42 + whalf, wbox.bottom - 66, whalf, 46), "NO",
                    self.close_wipe),
         ]
 
         rbox = self.resume_rect()
-        rhalf = (rbox.width - S(72)) // 2
+        rhalf = (rbox.width - 72) // 2
         self.resume_buttons = [
-            Button((rbox.x + S(30), rbox.bottom - S(66), rhalf, S(46)), "YES",
+            Button((rbox.x + 30, rbox.bottom - 66, rhalf, 46), "YES",
                    self.do_resume, accent=(126, 216, 150)),
-            # NO throws the saved run away, so it is hold-to-confirm - the
-            # action is a no-op and update_resume fires it instead.
-            Button((rbox.x + S(42) + rhalf, rbox.bottom - S(66), rhalf, S(46)), "NO",
-                   lambda: None, accent=(232, 92, 92)),
+            Button((rbox.x + 42 + rhalf, rbox.bottom - 66, rhalf, 46), "NO",
+                   self.do_fresh, accent=(232, 92, 92)),
         ]
 
         # Duration picker for timed mode
         dbox = self.duration_picker_rect()
         # 2x2 grid of buttons, centered
-        btn_w = S(90)
-        btn_h = S(50)
-        gap = S(20)
+        btn_w = 90
+        btn_h = 50
+        gap = 20
         total_w = btn_w * 2 + gap
         start_x = dbox.centerx - total_w // 2
         self.timed_bonus_button = Button(
-            (dbox.centerx - S(120), dbox.y + S(220), S(240), S(44)),
+            (dbox.centerx - 120, dbox.y + 220, 240, 44),
             self.timed_gems_label(),
             self.toggle_timed_bonus_gems,
             accent=(232, 150, 96),
@@ -4329,7 +4172,7 @@ class Game:
         )
         self.duration_buttons = [
     Button(
-        (start_x, dbox.y + S(80), btn_w, btn_h),
+        (start_x, dbox.y + 80, btn_w, btn_h),
         "1:00",
         lambda: self.pick_duration(60.0),
         accent=(232, 150, 96),
@@ -4337,7 +4180,7 @@ class Game:
         art_hover=self.skinned("menubuttonhovered", (btn_w, btn_h)),
     ),
     Button(
-        (start_x + btn_w + gap, dbox.y + S(80), btn_w, btn_h),
+        (start_x + btn_w + gap, dbox.y + 80, btn_w, btn_h),
         "1:30",
         lambda: self.pick_duration(90.0),
         accent=(232, 150, 96),
@@ -4345,7 +4188,7 @@ class Game:
         art_hover=self.skinned("menubuttonhovered", (btn_w, btn_h)),
     ),
     Button(
-        (start_x, dbox.y + S(80) + btn_h + gap, btn_w, btn_h),
+        (start_x, dbox.y + 80 + btn_h + gap, btn_w, btn_h),
         "2:00",
         lambda: self.pick_duration(120.0),
         accent=(232, 150, 96),
@@ -4353,7 +4196,7 @@ class Game:
         art_hover=self.skinned("menubuttonhovered", (btn_w, btn_h)),
     ),
     Button(
-        (start_x + btn_w + gap, dbox.y + S(80) + btn_h + gap, btn_w, btn_h),
+        (start_x + btn_w + gap, dbox.y + 80 + btn_h + gap, btn_w, btn_h),
         "2:30",
         lambda: self.pick_duration(150.0),
         accent=(232, 150, 96),
@@ -4369,68 +4212,53 @@ class Game:
         ]
 
         picker = self.music_rect()
-        self.music_list = ScrollList((picker.x + S(24), picker.y + S(76),
-                                      picker.width - S(48), picker.height - S(150)))
-        pw = picker.width - S(48)
+        self.music_list = ScrollList((picker.x + 24, picker.y + 76,
+                                      picker.width - 48, picker.height - 150))
+        pw = picker.width - 48
         self.music_buttons = [
-            Button((picker.x + S(24), picker.bottom - S(62), pw, S(44)), "CLOSE",
+            Button((picker.x + 24, picker.bottom - 62, pw, 44), "CLOSE",
                    self.close_music,
-                   art=self.skinned("menubutton", (pw, S(44))),
-                   art_hover=self.skinned("menubuttonhovered", (pw, S(44)))),
+                   art=self.skinned("menubutton", (pw, 44)),
+                   art_hover=self.skinned("menubuttonhovered", (pw, 44))),
         ]
 
         # Background picker list
         bgpicker = self.music_rect()  # reuse same rect
-        self.bg_list = ScrollList((bgpicker.x + S(24), bgpicker.y + S(76),
-                                   bgpicker.width - S(48), bgpicker.height - S(150)))
-        bgw = bgpicker.width - S(48)
+        self.bg_list = ScrollList((bgpicker.x + 24, bgpicker.y + 76,
+                                   bgpicker.width - 48, bgpicker.height - 150))
+        bgw = bgpicker.width - 48
         self.bg_picker_buttons = [
-            Button((bgpicker.x + S(24), bgpicker.bottom - S(62), bgw, S(44)), "CLOSE",
+            Button((bgpicker.x + 24, bgpicker.bottom - 62, bgw, 44), "CLOSE",
                    self.close_background_picker,
                    art=self.skinned("menubutton", (bgw, 44)),
                    art_hover=self.skinned("menubuttonhovered", (bgw, 44))),
         ]
 
         over = self.over_rect()
-        ox, ow = over.x + S(34), over.width - S(68)
-        third = (ow - S(20)) // 2
+        ox, ow = over.x + 34, over.width - 68
+        third = (ow - 20) // 2
         self.over_buttons = [
-            Button((ox, over.bottom - S(74), third, S(46)), "PLAY AGAIN",
+            Button((ox, over.bottom - 74, third, 46), "PLAY AGAIN",
                    lambda: self.reset(self.mode), accent=(126, 216, 150)),
-            Button((ox + third + S(20), over.bottom - S(74), third, S(46)), "TITLE",
+            Button((ox + third + 20, over.bottom - 74, third, 46), "TITLE",
                    self.return_to_title, accent=GOLD),
         ]
 
     @staticmethod
     def music_rect():
-        return pygame.Rect(WIDTH // 2 - S(230), HEIGHT // 2 - S(220), S(460), S(440))
-
-    def music_title_rect(self):
-        """Hitbox for the picker's heading. Derived from the rendered text so
-        it stays honest at every render scale, and padded so it is tappable
-        rather than pixel-perfect."""
-        box = self.music_rect()
-        image = self.font_big.render(self.music_title(), True, TEXT)
-        return pygame.Rect(box.x + S(24), box.y + S(24),
-                           image.get_width() + S(12),
-                           image.get_height() + S(8))
-
-    def music_title(self):
-        return "Secret ;)" if self.music_secret else "MUSIC"
+        return pygame.Rect(WIDTH // 2 - 230, HEIGHT // 2 - 220, 460, 440)
 
     @staticmethod
     def duration_picker_rect():
-        return pygame.Rect(WIDTH // 2 - S(230), HEIGHT // 2 - S(170), S(460), S(280))
+        return pygame.Rect(WIDTH // 2 - 230, HEIGHT // 2 - 170, 460, 280)
 
     @staticmethod
     def over_rect():
-        return pygame.Rect(WIDTH // 2 - S(210), HEIGHT // 2 - S(150), S(420), S(300))
+        return pygame.Rect(WIDTH // 2 - 210, HEIGHT // 2 - 150, 420, 300)
 
     @staticmethod
     def menu_rect():
-        # Wide enough for a row of four zoom chips, tall enough for the
-        # buttons underneath them.
-        return pygame.Rect(WIDTH // 2 - S(330), S(8), S(660), S(768))
+        return pygame.Rect(281, 8, 518, 794)
 
     # -- button actions ---------------------------------------------------
 
@@ -4449,66 +4277,11 @@ class Game:
         self.menu_open = False
         self.sel = None
         self.dragging = None
-        self.music_title_taps = 0
-        self.music_secret = self.audio.mode == SECRET_MUSIC_MODE
         self.music_list.items = self.audio.track_names()
         playing = self.audio.now_playing()
         self.music_list.current = (self.music_list.items.index(playing)
                                    if playing in self.music_list.items else -1)
         self.music_list.offset = 0.0
-
-    def tap_music_title(self):
-        """Five taps on the picker heading open the hidden folder.
-
-        Counted per visit: the tally resets whenever the picker opens, so a
-        stray click days ago cannot leave it one tap from firing.
-        """
-        self.music_title_taps += 1
-        if self.music_title_taps < SECRET_TAPS:
-            self.audio.play("menuclick")
-            return
-        self.music_title_taps = 0
-        self.toggle_secret_music()
-
-    def toggle_secret_music(self):
-        if not self.music_secret:
-            if not self.audio.secret_playlist:
-                # Nothing to show. Say so plainly rather than opening an
-                # empty list that looks broken.
-                self.audio.play("menuclick")
-                self.note = f"nothing in music/{SECRET_MUSIC_SUBDIR}"
-                return
-            self.music_secret = True
-            self.audio.use_playlist(SECRET_MUSIC_MODE)
-        else:
-            self.music_secret = False
-            self.audio.use_playlist(self.current_music_mode())
-        self.audio.play("levelup")
-        self.refresh_music_list()
-        self.note = "secret playlist" if self.music_secret else "back to music"
-
-    def current_music_mode(self):
-        """Whichever playlist this part of the game would normally use."""
-        if self.on_title:
-            return TITLE
-        if self.mode == EXTRAS and self.timed:
-            return TIMED_MUSIC_MODE
-        return self.mode
-
-    def refresh_music_list(self):
-        self.music_list.items = self.audio.track_names()
-        playing = self.audio.now_playing()
-        self.music_list.current = (self.music_list.items.index(playing)
-                                   if playing in self.music_list.items else -1)
-        self.music_list.offset = 0.0
-
-    def overlay_open(self):
-        """True when any panel sits above the screen. The title screen's
-        first click reveals the mode buttons, and that must not eat clicks
-        aimed at a panel on top of it."""
-        return (self.menu_open or self.music_open or self.bg_picker_open
-                or self.extras_open or self.credits_open or self.wipe_open
-                or self.resume_open or self.timed_duration_picker_open)
 
     def close_music(self):
         self.music_open = False
@@ -4672,13 +4445,13 @@ class Game:
         return True
 
     def draw_wiped(self, screen):
-        box = pygame.Rect(WIDTH // 2 - S(230), HEIGHT // 2 - S(90), S(460), S(180))
-        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
+        box = pygame.Rect(WIDTH // 2 - 230, HEIGHT // 2 - 90, 460, 180)
+        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, 16),
                     box.topleft)
         lines = [(self.font_big, "DATA RESET", GOLD),
                  (self.font_small, "ALL SAVES AND SETTINGS DELETED", DIM),
                  (self.font, "PLEASE CLOSE THE GAME", TEXT)]
-        y = box.y + S(30)
+        y = box.y + 30
         for font, text, colour in lines:
             img = font.render(text, True, colour)
             screen.blit(img, (box.centerx - img.get_width() // 2, y))
@@ -4696,7 +4469,6 @@ class Game:
 
     def open_menu(self):
         self.sync_menu_labels()
-        self.build_scale_buttons()  # rebuild scale buttons whenever menu opens
         # the menu takes over: nothing else stays open behind it
         self.music_open = False
         self.bg_picker_open = False
@@ -4708,70 +4480,6 @@ class Game:
         self.menu_open = True
         self.sel = None
         self.dragging = None
-
-    def build_scale_buttons(self):
-        """Render-scale chips, laid into the reserved band. Fullscreen only."""
-        self.scale_buttons = []
-        if self.display is None or not self.display.fullscreen:
-            return
-
-        box = self.menu_rect()
-        sx, sw = box.x + S(30), box.width - S(60)
-        current = RENDER_SCALE
-
-        gap = S(8)
-        btn_w = (sw - gap * (len(SCALE_OPTIONS) - 1)) // len(SCALE_OPTIONS)
-        for i, (factor, label) in enumerate(SCALE_OPTIONS):
-            on = abs(factor - current) < 0.01
-            self.scale_buttons.append(Button(
-                (sx + i * (btn_w + gap), self.scale_band_y,
-                 btn_w, self.scale_band_h),
-                label,
-                lambda f=factor: self.apply_scale(f),
-                accent=GOLD if on else (120, 126, 140),
-            ))
-
-    def apply_scale(self, factor):
-        """Menu action: change the internal render resolution."""
-        if self.display is None or not self.display.fullscreen:
-            return
-        if abs(RENDER_SCALE - factor) < 0.01:
-            return
-        self.rebuild_at_scale(factor)
-        self.settings["render_scale"] = factor
-        self.note = f"render scale {int(factor * 100)}%"
-        self.save_settings()
-
-    def rebuild_at_scale(self, factor):
-        """Re-render the game at a new internal resolution.
-
-        Everything derived from the layout constants has to be rebuilt: the
-        type, the gem art, the cached panel surfaces and every widget rect.
-        Rebuilding only some of them was what made earlier attempts at this
-        fall apart.
-        """
-        was = RENDER_SCALE
-        apply_render_scale(factor)
-        if was:
-            k = RENDER_SCALE / was
-            self.mouse = (int(self.mouse[0] * k), int(self.mouse[1] * k))
-        self.build_fonts()
-        self.reload_assets()                 # sprites, effects, backdrops
-        self.panel_bg = translucent((PANEL_W, PANEL_H), PANEL_FILL,
-                                    PANEL_EDGE, S(14))
-        self.menu_bg = translucent(self.menu_rect().size, PANEL_FILL,
-                                   PANEL_EDGE, S(16))
-        self.motes = [[random.uniform(0, WIDTH), random.uniform(0, HEIGHT),
-                       random.uniform(1.0, 2.8) * RENDER_SCALE,
-                       random.uniform(-11, -3) * RENDER_SCALE,
-                       random.uniform(0.25, 0.7)]
-                      for _ in range(PARTICLE_COUNT)]
-        self.build_widgets()
-        self.build_title_widgets()
-        self.apply_opacity()
-        if self.display is not None:
-            self.display.resize_layer()
-        self.build_scale_buttons()           # refresh which chip is lit
 
     def close_menu(self):
         self.menu_open = False
@@ -4802,7 +4510,6 @@ class Game:
             if not self.resume_rect().collidepoint(pos):
                 # clicking away backs out without touching the save
                 self.resume_open = False
-                self.fresh_held = 0.0
                 self.audio.play("menuclick")
             return
         if self.on_title and self.credits_open:
@@ -4840,9 +4547,6 @@ class Game:
                 for slider in self.sliders:
                     if slider.hit(pos):
                         return slider
-                for button in self.scale_buttons:
-                    if button.hit(pos):
-                        return button
                 for button in self.menu_buttons:
                     if button.hit(pos):
                         return button
@@ -4871,9 +4575,6 @@ class Game:
             for slider in self.sliders:
                 if slider.hit(pos):
                     return slider
-            for button in self.scale_buttons:
-                if button.hit(pos):
-                    return button
             for button in self.menu_buttons:
                 if button.hit(pos):
                     return button
@@ -4906,7 +4607,7 @@ class Game:
                 self.close_extras()
                 return
             # inside the box but not on a row: fall through to the buttons
-        elif self.on_title and not self.title_ready and not self.overlay_open():
+        elif self.on_title and not self.title_ready:
             self.title_ready = True        # first click reveals the modes
             self.audio.play("menuclick")
             return
@@ -4922,17 +4623,10 @@ class Game:
                     return
             return
         if self.menu_open:
-            # Rows and scale chips are handled here; anything else inside the
-            # box must fall through to widgets_at so the RESUME / QUIT /
-            # RETURN TO TITLE buttons still arm themselves on mouse-down.
             for key, rect, _, _ in self.setting_rows:
                 if rect.collidepoint(pos):
                     self.toggle_setting(key)
                     return
-            if not self.menu_rect().collidepoint(pos):
-                self.audio.play("menuclick")
-                self.close_menu()      # click outside the box dismisses it
-                return
 
         hit = self.widgets_at(pos)
         if isinstance(hit, Slider):
@@ -4944,19 +4638,12 @@ class Game:
             hit.down = True
             self.audio.play("menuclick")
             return
-        # The picker panels are reachable from the title screen too, so they
-        # get first refusal. The title catch-all below swallows everything it
-        # sees, which is why choosing a song from the title screen never
-        # worked.
-        if self.on_title and not (self.music_open or self.bg_picker_open):
+        if self.on_title:
             if self.menu_open and not self.menu_rect().collidepoint(pos):
                 self.audio.play("menuclick")
                 self.close_menu()
             return
         if self.music_open:
-            if self.music_title_rect().collidepoint(pos):
-                self.tap_music_title()
-                return
             row = self.music_list.index_at(pos)
             if row >= 0:
                 self.audio.play("menuclick")
@@ -4988,6 +4675,16 @@ class Game:
                         self.audio.play("menuclick")
                     return
             return
+        if self.menu_open:
+            for key, rect, _, _ in self.setting_rows:
+                if rect.collidepoint(pos):
+                    self.toggle_setting(key)
+                    return
+            if not self.menu_rect().collidepoint(pos):
+                self.audio.play("menuclick")
+                self.close_menu()      # click outside the box dismisses it
+            return
+
         if self.state not in ("idle", "clear", "fall"):
             return
         cell = self.cell_at(pos)
@@ -5005,8 +4702,6 @@ class Game:
             self.audio.play("select")
 
     def on_motion(self, pos):
-        self.mouse = pos            # before any early return, or the
-                                    # spotlight freezes mid-drag
         if self.data_wiped:
             return
         if self.dragging is not None:
@@ -5059,7 +4754,7 @@ class Game:
         fired = None
         for button in (self.buttons + self.menu_buttons + self.over_buttons
                        + self.title_buttons + self.music_buttons
-                       + self.extra_buttons + self.scale_buttons
+                       + self.extra_buttons
                        + self.setting_buttons + self.credit_buttons
                        + self.resume_buttons + self.wipe_buttons + self.duration_buttons
                        + self.bg_picker_buttons):
@@ -5112,7 +4807,7 @@ class Game:
             self.update_scheduled_actions(dt)
         if self.credits_open:
             self.update_credit_gems(dt)
-            self.credit_scroll += S(BASE_CREDIT_SPEED) * dt
+            self.credit_scroll += CREDIT_SPEED * dt
             if self.credit_scroll > self.credits_height():
                 self.credit_scroll = self.start_scroll()   # loop the roll
         if self.on_title:
@@ -5630,16 +5325,16 @@ class Game:
         if hot:
             ring = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
             pygame.draw.rect(ring, (255, 90, 70, int(90 + 110 * pulse)),
-                             (2, 2, TILE - S(4), TILE - S(4)), S(3), border_radius=S(10))
+                             (2, 2, TILE - 4, TILE - 4), 3, border_radius=10)
             screen.blit(ring, (int(x), int(y)))
         label = self.font_big.render(str(fuse), True, (255, 255, 255))
-        pad = S(5)
+        pad = 5
         w = label.get_width() + pad * 2
-        h = label.get_height() + S(2)
+        h = label.get_height() + 2
         chip = translucent((w, h), (200, 60, 50, 235) if hot
                            else (30, 34, 48, 225), None, h // 2)
         chip.blit(label, (pad, 1))
-        screen.blit(chip, (int(x + (TILE - w) / 2), int(y + TILE - h - S(4))))
+        screen.blit(chip, (int(x + (TILE - w) / 2), int(y + TILE - h - 4)))
 
     def draw_behind(self, screen, gem, x, y):
         """Whatever sits *under* a special gem: fire, or the power-gem halo."""
@@ -5753,7 +5448,7 @@ class Game:
             delay = (r + c) / (ROWS + COLS) * 0.30
             p = clamp01((self.t * self.levelup_pause() - delay) / 0.40)
             scale = 1.0 - ease_in_out(p)
-            y -= S(30) * p
+            y -= 30 * p
 
         if (r, c) in self.pops:
             p = 1.0 - self.pops[(r, c)] / POP_TIME
@@ -5766,17 +5461,17 @@ class Game:
         pulse = 0.5 + 0.5 * math.sin(self.time * 4.5)
         label = self.font_small.render(f"+{int(BONUS_SECONDS)}s", True,
                                        (18, 32, 24))
-        pad = S(5)
+        pad = 5
         w = label.get_width() + pad * 2
-        h = label.get_height() + S(2)
+        h = label.get_height() + 2
         chip = translucent((w, h), (126, 240, 168, 200 + int(55 * pulse)),
                            None, h // 2)
         chip.blit(label, (pad, 1))
-        screen.blit(chip, (int(x + (TILE - w) / 2), int(y + TILE - h - S(3))))
+        screen.blit(chip, (int(x + (TILE - w) / 2), int(y + TILE - h - 3)))
 
         ring = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
         pygame.draw.rect(ring, (126, 240, 168, int(70 + 60 * pulse)),
-                         (2, 2, TILE - S(4), TILE - S(4)), S(2), border_radius=S(10))
+                         (2, 2, TILE - 4, TILE - 4), 2, border_radius=10)
         screen.blit(ring, (int(x), int(y)))
 
     @staticmethod
@@ -5789,27 +5484,27 @@ class Game:
 
     def draw_panel(self, screen):
         screen.blit(self.panel_bg, (PANEL_X, PANEL_Y))
-        x = PANEL_X + S(16)
-        width = PANEL_W - S(32)
+        x = PANEL_X + 16
+        width = PANEL_W - 32
 
         if not self.scoring:
             # Zen keeps no score, so the readouts would only ever show 0
             zen = self.font_score.render("ZEN", True, GOLD)
-            screen.blit(zen, (x, PANEL_Y + S(40)))
+            screen.blit(zen, (x, PANEL_Y + 40))
             for button in self.buttons:
                 button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
-            self.draw_note(screen, x, PANEL_Y + S(208), width)
+            self.draw_note(screen, x, PANEL_Y + 208, width)
             track = self.audio.now_playing()
             if track:
                 screen.blit(self.font_small.render("NOW PLAYING", True, DIM),
-                            (x, PANEL_Y + PANEL_H - S(296)))
-                self.wrapped(screen, track, x, PANEL_Y + PANEL_H - S(274),
+                            (x, PANEL_Y + PANEL_H - 296))
+                self.wrapped(screen, track, x, PANEL_Y + PANEL_H - 274,
                              width, DIM)
             return
 
-        screen.blit(self.font_small.render("SCORE", True, DIM), (x, PANEL_Y + S(26)))
+        screen.blit(self.font_small.render("SCORE", True, DIM), (x, PANEL_Y + 26))
         screen.blit(self.font_score.render(f"{int(self.shown_score):,}", True, TEXT),
-                    (x, PANEL_Y + S(48)))
+                    (x, PANEL_Y + 48))
 
         if self.timed:
             low = self.time_left <= LOW_TIME
@@ -5818,52 +5513,52 @@ class Game:
                      else TEXT)
             secs = int(math.ceil(self.time_left))
             screen.blit(self.font_small.render("TIME", True, DIM),
-                        (x, PANEL_Y + S(116)))
+                        (x, PANEL_Y + 116))
             screen.blit(self.font_score.render(f"{secs // 60}:{secs % 60:02d}",
-                                               True, color), (x, PANEL_Y + S(138)))
+                                               True, color), (x, PANEL_Y + 138))
             screen.blit(self.font_small.render(f"LEVEL {self.level}", True, DIM),
-                        (x, PANEL_Y + S(182)))
+                        (x, PANEL_Y + 182))
         else:
             screen.blit(self.font_small.render("LEVEL", True, DIM),
-                        (x, PANEL_Y + S(116)))
+                        (x, PANEL_Y + 116))
             screen.blit(self.font_score.render(str(self.level), True, TEXT),
-                        (x, PANEL_Y + S(138)))
+                        (x, PANEL_Y + 138))
 
         # The bar always shows progress toward the next level. In timed mode
         # the clock has its own readout above, so mirroring it here left no
         # indication of how close the next level was.
-        self.bar(screen, x, PANEL_Y + (S(200) if self.timed else S(184)), width, S(10),
+        self.bar(screen, x, PANEL_Y + (200 if self.timed else 184), width, 10,
                  self.shown_progress, GOLD)
 
         if self.extra("lock"):
-            y = PANEL_Y + S(250)
+            y = PANEL_Y + 250
             screen.blit(self.font_small.render("SCORING", True, DIM), (x, y))
             sprite = self.normal[self.lock_kind]
             screen.blit(sprite, (x, y + 20))
             secs = max(0, int(math.ceil(self.lock_left)))
             screen.blit(self.font_score.render(str(secs), True,
                         (232, 96, 96) if secs <= 3 else TEXT),
-                        (x + TILE + S(12), y + S(36)))
-            self.bar(screen, x, y + TILE + S(26), width, S(8),
+                        (x + TILE + 12, y + 36))
+            self.bar(screen, x, y + TILE + 26, width, 8,
                      self.lock_left / LOCK_SECONDS, (176, 140, 240))
 
         mode = self.font_small.render("TIMED" if self.timed else "ENDLESS",
                                       True, DIM)
-        screen.blit(mode, (PANEL_X + PANEL_W - S(16) - mode.get_width(),
-                           PANEL_Y + S(28)))
+        screen.blit(mode, (PANEL_X + PANEL_W - 16 - mode.get_width(),
+                           PANEL_Y + 28))
 
         # Timed mode has an extra bar above this, so the note sits lower
         # there to keep clear of it.
-        note_y = PANEL_Y + (S(246) if self.timed else S(214))
+        note_y = PANEL_Y + (246 if self.timed else 214)
         if self.mode == EXTRAS and self.timed and self.extra("lock"):
-            note_y -= S(6)
+            note_y -= 6
         self.draw_note(screen, x, note_y, width)
 
         track = self.audio.now_playing()
         if track:
             screen.blit(self.font_small.render("NOW PLAYING", True, DIM),
-                        (x, PANEL_Y + PANEL_H - S(296)))
-            self.wrapped(screen, track, x, PANEL_Y + PANEL_H - S(274), width, DIM)
+                        (x, PANEL_Y + PANEL_H - 296))
+            self.wrapped(screen, track, x, PANEL_Y + PANEL_H - 274, width, DIM)
 
         for button in self.buttons:
             button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
@@ -5876,51 +5571,12 @@ class Game:
             trial = f"{line} {word}".strip()
             if self.font_small.size(trial)[0] > width and line:
                 screen.blit(self.font_small.render(line, True, color), (x, y))
-                y += self.font_small.get_height() + S(3)
+                y += 17
                 line = word
             else:
                 line = trial
         if line:
             screen.blit(self.font_small.render(line, True, color), (x, y))
-
-    def spotlight_hole(self):
-        """A black tile whose alpha fades from clear at the centre to solid
-        at the rim. Cached: rebuilding this gradient every frame was the one
-        part of the effect expensive enough to notice."""
-        radius = S(SPOTLIGHT_RADIUS)
-        feather = max(1, S(SPOTLIGHT_FEATHER))
-        size = radius * 2
-        if self._spot_hole is not None and self._spot_hole.get_width() == size:
-            return self._spot_hole
-        hole = pygame.Surface((size, size), pygame.SRCALPHA)
-        hole.fill((0, 0, 0, 255))
-        # Concentric circles from the rim inwards. pygame.draw writes raw
-        # pixel values rather than blending, so each ring simply replaces the
-        # alpha under it.
-        steps = max(2, feather)
-        for i in range(steps + 1):
-            f = i / steps
-            r = int(radius - feather * (1 - f))
-            alpha = int(255 * (1 - f) ** 2)
-            if r > 0:
-                pygame.draw.circle(hole, (0, 0, 0, alpha), (radius, radius), r)
-        self._spot_hole = hole
-        return hole
-
-    def draw_spotlight(self, screen):
-        """Black everywhere except a soft circle around the pointer."""
-        if self._spot_mask is None or self._spot_mask.get_size() != (WIDTH, HEIGHT):
-            self._spot_mask = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        mask = self._spot_mask
-        mask.fill((0, 0, 0, 255))
-        hole = self.spotlight_hole()
-        radius = hole.get_width() // 2
-        mx, my = self.mouse
-        # BLEND_RGBA_MIN keeps the lower alpha of the two, which punches the
-        # cached gradient straight through the black sheet in one blit.
-        mask.blit(hole, (int(mx) - radius, int(my) - radius),
-                  special_flags=pygame.BLEND_RGBA_MIN)
-        screen.blit(mask, (0, 0))
 
     def draw_holes(self, screen, opaque=False):
         """Darken the cells that are not part of a Shapes silhouette.
@@ -5933,7 +5589,7 @@ class Game:
             return
         # Always use darkened tiles - no opaque blocks
         shade = (14, 16, 26, 200)
-        tile = translucent((TILE, TILE), shade, None, S(0))
+        tile = translucent((TILE, TILE), shade, None, 0)
         for r in range(ROWS):
             for c in range(COLS):
                 cell = self.grid[r][c]
@@ -5948,7 +5604,7 @@ class Game:
         for r, c in self.hint:
             ring = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
             pygame.draw.rect(ring, HINT_COLOR + (alpha,),
-                             (2, 2, TILE - S(4), TILE - S(4)),
+                             (2, 2, TILE - 4, TILE - 4),
                              int(2 + 2 * pulse), border_radius=10)
             screen.blit(ring, (BOARD_X + c * TILE, BOARD_Y + r * TILE))
 
@@ -5992,14 +5648,14 @@ class Game:
     def draw_over(self, screen):
 
         box = self.over_rect()
-        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
+        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, 16),
                     box.topleft)
 
         lines = [(self.font_huge, "TIME UP", TEXT, 30),
                  (self.font_score, f"{self.score:,}", GOLD, 14),
                  (self.font_small, "POINTS", DIM, 22),
                  (self.font, f"reached level {self.level}", DIM, 0)]
-        y = box.y + S(34)
+        y = box.y + 34
         for font, text, color, gap in lines:
             image = font.render(text, True, color)
             screen.blit(image, (box.centerx - image.get_width() // 2, y))
@@ -6010,25 +5666,24 @@ class Game:
 
     def draw_music(self, screen):
         box = self.music_rect()
-        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
+        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, 16),
                     box.topleft)
-        title = self.font_big.render(self.music_title(), True,
-                                     GOLD if self.music_secret else TEXT)
-        screen.blit(title, (box.x + S(24), box.y + S(24)))
+        title = self.font_big.render("MUSIC", True, TEXT)
+        screen.blit(title, (box.x + 24, box.y + 24))
         hint = self.font_small.render("SCROLL WHEEL", True, DIM)
-        screen.blit(hint, (box.right - S(24) - hint.get_width(), box.y + S(30)))
+        screen.blit(hint, (box.right - 24 - hint.get_width(), box.y + 30))
         self.music_list.draw(screen, self.font)
         for button in self.music_buttons:
             button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
 
     def draw_background_picker(self, screen):
         box = self.music_rect()
-        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
+        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, 16),
                     box.topleft)
         title = self.font_big.render("BACKGROUNDS", True, TEXT)
-        screen.blit(title, (box.x + S(24), box.y + S(24)))
+        screen.blit(title, (box.x + 24, box.y + 24))
         hint = self.font_small.render("SCROLL WHEEL", True, DIM)
-        screen.blit(hint, (box.right - S(24) - hint.get_width(), box.y + S(30)))
+        screen.blit(hint, (box.right - 24 - hint.get_width(), box.y + 30))
         self.bg_list.draw(screen, self.font)
         for button in self.bg_picker_buttons:
             button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
@@ -6051,64 +5706,57 @@ class Game:
         screen.blit(self.menu_bg, box.topleft)
 
         title = self.font_big.render("MENU", True, TEXT)
-        screen.blit(title, (box.x + S(30), box.y + S(26)))
+        screen.blit(title, (box.x + 30, box.y + 26))
 
         # Pixel glyphs are far wider per character than proportional type, so
         # this sits under the title rather than beside it, and stays short.
         hint = self.font_small.render("ESC TO CLOSE", True, DIM)
-        screen.blit(hint, (box.right - S(30) - hint.get_width(),
-                           box.y + S(26) + title.get_height() - hint.get_height()))
+        screen.blit(hint, (box.right - 30 - hint.get_width(),
+                           box.y + 26 + title.get_height() - hint.get_height()))
 
         for key, rect, label, blurb in self.setting_rows:
             on = self.settings.get(key, True)
             screen.blit(translucent(rect.size,
                                     GOLD + (60,) if on else (255, 255, 255, 18),
-                                    None, S(8)), rect.topleft)
-            tick = pygame.Rect(rect.x + S(8), rect.centery - S(10), S(20), S(20))
-            pygame.draw.rect(screen, TEXT if on else DIM, tick, max(1, S(2)),
-                             border_radius=S(4))
+                                    None, 8), rect.topleft)
+            tick = pygame.Rect(rect.x + 8, rect.centery - 10, 20, 20)
+            pygame.draw.rect(screen, TEXT if on else DIM, tick, 2,
+                             border_radius=4)
             if on:
-                pygame.draw.line(screen, GOLD, (tick.x + S(4), tick.centery),
-                                 (tick.centerx, tick.bottom - S(5)), S(3))
-                pygame.draw.line(screen, GOLD, (tick.centerx, tick.bottom - S(5)),
-                                 (tick.right - S(3), tick.y + S(3)), S(3))
+                pygame.draw.line(screen, GOLD, (tick.x + 4, tick.centery),
+                                 (tick.centerx, tick.bottom - 5), 3)
+                pygame.draw.line(screen, GOLD, (tick.centerx, tick.bottom - 5),
+                                 (tick.right - 3, tick.y + 3), 3)
             name = self.font.render(label, True, TEXT if on else DIM)
-            screen.blit(name, (rect.x + S(38), rect.y + S(5)))
-            note = Button.fit(self.font_small, blurb, rect.width - S(46))
+            screen.blit(name, (rect.x + 38, rect.y + 5))
+            note = Button.fit(self.font_small, blurb, rect.width - 46)
             screen.blit(note.render(blurb, True, DIM),
-                        (rect.x + S(38), rect.y + S(5) + name.get_height() + S(4)))
+                        (rect.x + 38, rect.y + 5 + name.get_height() + 4))
 
         for slider in self.sliders:
             slider.draw(screen, self.font, self.font_small,
                         dragging=self.dragging is slider)
 
         head = self.font_small.render("GRAPHICS", True, DIM)
-        screen.blit(head, (box.x + S(30), box.y + S(210)))
+        screen.blit(head, (box.x + 30, box.y + 210))
         for key, rect, label, blurb in self.setting_rows:
             on = self.settings.get(key, True)
             screen.blit(translucent(rect.size,
                                     GOLD + (60,) if on else (255, 255, 255, 18),
-                                    None, S(8)), rect.topleft)
-            tick = pygame.Rect(rect.x + S(8), rect.centery - S(10), S(20), S(20))
-            pygame.draw.rect(screen, TEXT if on else DIM, tick, max(1, S(2)),
-                             border_radius=S(4))
+                                    None, 8), rect.topleft)
+            tick = pygame.Rect(rect.x + 8, rect.centery - 10, 20, 20)
+            pygame.draw.rect(screen, TEXT if on else DIM, tick, 2,
+                             border_radius=4)
             if on:
-                pygame.draw.line(screen, GOLD, (tick.x + S(4), tick.centery),
-                                 (tick.centerx, tick.bottom - S(5)), S(3))
-                pygame.draw.line(screen, GOLD, (tick.centerx, tick.bottom - S(5)),
-                                 (tick.right - S(3), tick.y + S(3)), S(3))
+                pygame.draw.line(screen, GOLD, (tick.x + 4, tick.centery),
+                                 (tick.centerx, tick.bottom - 5), 3)
+                pygame.draw.line(screen, GOLD, (tick.centerx, tick.bottom - 5),
+                                 (tick.right - 3, tick.y + 3), 3)
             name = self.font.render(label, True, TEXT if on else DIM)
-            screen.blit(name, (rect.x + S(38), rect.y + S(5)))
-            note = Button.fit(self.font_small, blurb, rect.width - S(46))
+            screen.blit(name, (rect.x + 38, rect.y + 5))
+            note = Button.fit(self.font_small, blurb, rect.width - 46)
             screen.blit(note.render(blurb, True, DIM),
-                        (rect.x + S(38), rect.y + S(5) + name.get_height() + S(4)))
-
-        if self.scale_buttons:
-            head = self.font_small.render("RESOLUTION", True, DIM)
-            screen.blit(head, (box.x + S(30), self.scale_band_y - S(20)))
-            for button in self.scale_buttons:
-                button.draw(screen, self.font_small,
-                            self.hover_lift.get(id(button), 0.0))
+                        (rect.x + 38, rect.y + 5 + name.get_height() + 4))
 
         for button in self.menu_buttons:
             button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
@@ -6119,7 +5767,7 @@ class Game:
         ring = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         center = (BOARD_X + BOARD_W // 2, BOARD_Y + BOARD_H // 2)
         pygame.draw.circle(ring, (255, 255, 255, int(170 * (1 - p))),
-                           center, int(p * WIDTH * 0.85), S(10))
+                           center, int(p * WIDTH * 0.85), 10)
         screen.blit(ring, (0, 0))
         banner = self.font_huge.render(f"LEVEL {self.level}", True, (255, 255, 255))
         banner.set_alpha(int(255 * (1 - abs(self.t * 2 - 1))))
@@ -6143,13 +5791,7 @@ class Game:
         self.chaos_art = load_chaos_assets()
         sheet = load_still(SMOKE_ASSET)
         self.smoke = split_clusters(sheet) if sheet is not None else []
-        # A generated fallback is sized to the layer, so it has to be remade
-        # when the render scale changes or it covers only part of the frame.
-        loaded = load_backgrounds()
-        if loaded:
-            self.backgrounds = loaded
-        elif not self.backgrounds or self.backgrounds[0].get_size() != (WIDTH, HEIGHT):
-            self.backgrounds = [fallback_background()]
+        self.backgrounds = load_backgrounds() or self.backgrounds
         self.title_bg = load_title_background()
         self.title_art = self.build_title()
         self.banner = self.build_banner()
@@ -6364,7 +6006,7 @@ class Game:
             r, c = self.sel
             grow = int(3 * (0.5 + 0.5 * math.sin(self.time * 6.0)))
             pygame.draw.rect(screen, (255, 255, 255),
-                             (BOARD_X + c * TILE, BOARD_Y + r * TILE, TILE, TILE), S(3),
+                             (BOARD_X + c * TILE, BOARD_Y + r * TILE, TILE, TILE), 3,
                              border_radius=6)
 
         clip = screen.get_clip()
@@ -6432,14 +6074,6 @@ class Game:
             screen.blit(label, label.get_rect(
                 center=(cx, cy + image.get_height() // 2 + 26)))
 
-        # Spotlight: black out everything but a circle at the cursor, then
-        # put the score panel back on top so the readouts and buttons stay
-        # readable. It goes here, after the board but before the veil and any
-        # overlay, so menus and dialogs are never dimmed by it.
-        if self.extra("spotlight"):
-            self.draw_spotlight(screen)
-            self.draw_panel(screen)
-
         # Dim the board and side panel before any overlay. The display-space
         # veil sits UNDER this layer, so without this the board stayed at full
         # brightness behind a menu.
@@ -6477,7 +6111,6 @@ class Display:
         self.layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         self._cover_cache = {}
         self._scaled = None
-        self._pre = None
         self.scaler = "smooth_dest"
         self.pick_scaler()
         self.scale = 1.0
@@ -6500,7 +6133,6 @@ class Display:
         self.recompute()
         self.layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         self._scaled = None
-        self._pre = None
         if game is not None:
             game.reload_assets()
         return self.surface
@@ -6560,16 +6192,6 @@ class Display:
         if self._scaled is None or self._scaled.get_size() != size:
             self._scaled = pygame.Surface(size, pygame.SRCALPHA)
         self._scaled.fill((0, 0, 0, 0))
-
-        lw, lh = self.layer.get_size()
-        fx, fy = size[0] / lw, size[1] / lh
-        # Exact integer ratio: nearest neighbour is not merely adequate here,
-        # it is correct - every source pixel becomes a clean square block, and
-        # smoothing would only soften edges that need no softening.
-        if abs(fx - round(fx)) < 0.002 and abs(fy - round(fy)) < 0.002:
-            self._scaled.blit(pygame.transform.scale(self.layer, size), (0, 0))
-            return self._scaled
-
         if self.scaler == "smooth_dest":
             pygame.transform.smoothscale(self.layer, size, self._scaled)
         elif self.scaler == "smooth":
@@ -6581,20 +6203,9 @@ class Display:
 
     def recompute(self):
         dw, dh = self.surface.get_size()
-        # The layer is fitted to the screen, so a higher render scale means
-        # a bigger layer meeting a smaller fit factor - same picture size,
-        # more pixels behind it.
         self.scale = min(dw / WIDTH, dh / HEIGHT)
         self.offset = (int((dw - WIDTH * self.scale) / 2),
                        int((dh - HEIGHT * self.scale) / 2))
-
-    def resize_layer(self):
-        """Rebuild the render target after a render-scale change."""
-        self.layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        self.recompute()
-        self._scaled = None
-        self._pre = None
-        self._cover_cache.clear()
 
     def to_game(self, pos):
         """Turn a real mouse position into virtual 960x720 coordinates."""
@@ -6661,8 +6272,6 @@ class Display:
         pygame.display.flip()
 
 
-
-
 def main():
     # This line has to come BEFORE pygame.init(). The default mixer buffer is
     # 4096 samples, which puts a very audible delay between clicking a gem and
@@ -6727,11 +6336,6 @@ def main():
     if game.settings.get("fullscreen") and not display.fullscreen:
         display.set_fullscreen(True, game)
     game.settings["fullscreen"] = display.fullscreen
-    # The saved render scale can only be applied once we know we are actually
-    # fullscreen, since windowed mode always renders 1:1.
-    saved = game.settings.get("render_scale", DEFAULT_RENDER_SCALE)
-    if display.fullscreen and abs(saved - RENDER_SCALE) > 0.01:
-        game.apply_scale(saved)
 
     while True:
         dt = min(clock.tick(FPS) / 1000.0, 0.05)
@@ -6789,12 +6393,6 @@ def main():
                     and game.wipe_buttons[0].rect.collidepoint(
                         display.to_game(pygame.mouse.get_pos())))
             game.update_wipe(dt, held)
-
-        if game.resume_open:
-            held = (pygame.mouse.get_pressed()[0]
-                    and game.resume_buttons[1].rect.collidepoint(
-                        display.to_game(pygame.mouse.get_pos())))
-            game.update_resume(dt, held)
         game.update(dt)
         display.present(game)
 
