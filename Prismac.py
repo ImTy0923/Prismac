@@ -247,9 +247,9 @@ CAMPAIGN_SCORE_BONUS = 0.14        # per area, compounding on the base score
 # Three achievement stars, shown under the logo. Earnable in any order.
 # (key, title shown when it is won, how it is earned)
 STAR_DEFS = (
-    ("endless100", "ENDLESS MASTER", "REACHED LEVEL 100 IN ENDLESS"),
-    ("deep",       "INTO THE DEEP",  "BEAT THE DEEP"),
-    ("space",      "SPACEFARER",     "BEAT SPACE"),
+    ("endless100", "ENDLESS 100", "REACHED LEVEL 100 IN ''ENDLESS''"),
+    ("deep",       "MUST GO DEEPER",  "BEAT ''THE DEEP'' IN CAMPAIGN"),
+    ("space",      "ORBITER",     "BEAT ''SPACE'' IN CAMPAIGN"),
 )
 ENDLESS_STAR_LEVEL = 100
 
@@ -322,14 +322,14 @@ def campaign_level(number):
         # what the game can actually produce.
         if kind == GOAL_GEMS:
             budget = 24 - step // 2
-            per = (3.2 + step * 0.06) * modifier_factor(mods,
+            per = (3.6 + step * 0.09) * modifier_factor(mods,
                                                         MODIFIER_GEM_FACTOR)
             target = int(round(budget * per / 2.0) * 2)
             return {"kind": kind, "target": target, "moves": budget,
                     "extras": mods,
                     "text": f"CLEAR {target} GEMS IN {budget} MOVES"}
-        per_move = (140 + step * 8) * modifier_factor(mods,
-                                                      MODIFIER_SCORE_FACTOR)
+        per_move = (170 + step * 12) * modifier_factor(mods,
+                                                       MODIFIER_SCORE_FACTOR)
         if kind == GOAL_TIME:
             seconds = 60 - step
             target = int(round(seconds / 2.5 * per_move / 50.0) * 50)
@@ -384,7 +384,7 @@ def campaign_level(number):
 # Short names for the level picker, where a row can carry four modifiers and
 # the full names ("COLOR LOCK + MONO + SPOTLIGHT + EXPLOSIVES") do not fit at
 # a readable size.
-MODIFIER_SHORT = {"mono": "MONO", "boom": "BOMBS", "lock": "LOCK",
+MODIFIER_SHORT = {"mono": "MONO", "boom": "EXPLODE", "lock": "COLORLOCK",
                   "spotlight": "SPOT", "chaos": "CHAOS"}
 
 
@@ -1348,9 +1348,220 @@ def add_chaos_elements(g):
             g[r][c] = Gem.bomb()
 
 
+# Hand-drawn silhouettes. A formula can only really produce blobs and
+# wedges; anything with a notch, a spike or a hole in it has to be drawn.
+# '#' is a playable cell, '.' becomes a hole.
+#
+# Keep the strokes at least two cells thick. A Shapes run ends when the board
+# has no moves left, and one-cell-wide corridors cannot form a match of three
+# - an early spiral drawn that way died after two moves.
+SHAPE_ART = {
+"heart": """
+.##...##.
+#########
+#########
+#########
+#########
+.#######.
+..#####..
+...###...
+....#....""",
+"star": """
+...###...
+...###...
+#########
+#########
+.#######.
+..#####..
+.###.###.
+###...###
+##.....##""",
+"skull": """
+.#######.
+#########
+#########
+##.###.##
+##.###.##
+#########
+.#######.
+.#.#.#.#.
+.#######.""",
+"crown": """
+#.......#
+#..#.#..#
+##.#.#.##
+##.###.##
+#########
+#########
+#########
+#########
+.#######.""",
+"bolt": """
+....####.
+...####..
+..####...
+.######..
+..#######
+....####.
+...####..
+..####...
+.####....""",
+"crystal": """
+....#....
+...###...
+..#####..
+.#######.
+#########
+#########
+.#######.
+..#####..
+...###...""",
+"anchor": """
+...###...
+..#####..
+...###...
+#########
+#########
+...###...
+##.###.##
+#########
+.#######.""",
+"tree": """
+....#....
+...###...
+..#####..
+.#######.
+..#####..
+.#######.
+#########
+....#....
+...###...""",
+"swirl": """
+..#####..
+.#######.
+##.....##
+##.######
+.########
+########.
+######.##
+##.....##
+.#######.""",
+"moon": """
+...####..
+..######.
+.####.###
+.###...##
+.###....#
+.###...##
+.####.###
+..######.
+...####..""",
+
+"ghost": """
+..#####..
+.#######.
+#########
+##.###.##
+##.###.##
+#########
+#########
+#########
+##.###.##""",
+"fish": """
+.........
+..####.##
+.#######.
+#########
+#########
+.#######.
+..####.##
+.........
+.........""",
+"mushroom": """
+..#####..
+.#######.
+#########
+#########
+.#######.
+...###...
+...###...
+..#####..
+..#####..""",
+"cat": """
+##.....##
+###...###
+#########
+#########
+##.###.##
+#########
+#########
+.#######.
+..#####..""",
+"flower": """
+..##.##..
+.#######.
+##.###.##
+#########
+.#######.
+...###...
+...###...
+..#####..
+.#######.""",
+"bell": """
+...###...
+..#####..
+.#######.
+.#######.
+#########
+#########
+#########
+.#######.
+...###...""",
+"house": """
+....#....
+...###...
+..#####..
+.#######.
+#########
+##.###.##
+##.###.##
+#########
+#########""",
+"spade": """
+....#....
+...###...
+..#####..
+.#######.
+#########
+#########
+#.#####.#
+....#....
+...###...""",
+"hex": """
+..#####..
+.#######.
+#########
+#########
+#########
+#########
+#########
+.#######.
+..#####..""",
+"wave": """
+.........
+###...###
+####.####
+#########
+.#######.
+#########
+####.####
+###...###
+.........""",
+}
+
 SHAPE_MASKS = (
     "diamond", "cross", "hourglass", "ring", "arrow", "butterfly",
-)
+) + tuple(SHAPE_ART)
 
 
 def shape_mask(name):
@@ -1359,6 +1570,21 @@ def shape_mask(name):
     Returns a set of (row, col). Everything outside it becomes a hole, which
     is what actually makes a Shapes board look like a shape.
     """
+    drawn = SHAPE_ART.get(name)
+    if drawn is not None:
+        rows = drawn.strip("\n").split("\n")
+        # A row longer than the board used to be silently clipped, quietly
+        # distorting the silhouette. Say so instead.
+        wrong = [i for i, line in enumerate(rows) if len(line) > COLS]
+        if len(rows) > ROWS or wrong:
+            print(f"  shape '{name}' is drawn wrong: "
+                  f"{len(rows)} rows, over-wide rows {wrong}")
+        keep = {(r, c)
+                for r, line in enumerate(rows[:ROWS])
+                for c, ch in enumerate(line[:COLS]) if ch == "#"}
+        return keep if len(keep) >= ROWS * COLS * 0.45 else {
+            (r, c) for r in range(ROWS) for c in range(COLS)}
+
     cr, cc = (ROWS - 1) / 2, (COLS - 1) / 2
     keep = set()
     for r in range(ROWS):
@@ -2446,23 +2672,26 @@ def load_backgrounds():
 
     Cover rather than stretch: the image keeps its aspect ratio and the
     overflow is cropped, so nothing ends up squashed.
+    Backgrounds are shuffled randomly for each game session.
+    
+    Returns: (surfaces, filenames) - lists of surfaces and their original filenames
     """
     shots = []
+    shot_names = []
     failures = []
     if not os.path.isdir(BACKGROUND_DIR):
         print(f"  backgrounds folder not found at {BACKGROUND_DIR}")
-        return shots
-    # Sort by a lower-cased key but carry the REAL filename along. Rebuilding
-    # the name from the sort key and looking it up again meant anything with
-    # a capital letter never matched itself and was dropped without a word -
-    # so "1.png" loaded and "Sunset.png" silently did not.
-    names = []
+        return shots, shot_names
+    # Collect all image files from the folder (any name works)
+    filenames = []
     for filename in os.listdir(BACKGROUND_DIR):
         stem, ext = os.path.splitext(filename)
         if ext.lower() in (".png", ".jpg", ".jpeg", ".webp"):
-            key = (0, int(stem), "") if stem.isdigit() else (1, 0, stem.lower())
-            names.append((key, filename))
-    for _, filename in sorted(names):
+            filenames.append(filename)
+    # Shuffle for random order each session
+    random.shuffle(filenames)
+    
+    for filename in filenames:
         path = os.path.join(BACKGROUND_DIR, filename)
         try:
             photo = pygame.image.load(path)
@@ -2492,13 +2721,16 @@ def load_backgrounds():
         scrim.fill((0, 0, 0, BG_DIM))   # keeps the gems readable
         canvas.blit(scrim, (0, 0))
         shots.append(canvas)
+        # Store the filename without extension for display
+        stem, _ = os.path.splitext(filename)
+        shot_names.append(stem)
     if failures:
         print(f"  {len(failures)} background(s) could not be decoded. "
               "If they are .webp, re-save them as .png - SDL_image is often "
               "built without WEBP support on macOS.")
-    if not shots and names:
-        print(f"  found {len(names)} background file(s) but loaded none.")
-    return shots
+    if not shots and filenames:
+        print(f"  found {len(filenames)} background file(s) but loaded none.")
+    return shots, shot_names
 
 
 OPAQUE_UI = False          # set by the "reduce transparency" option
@@ -3256,10 +3488,11 @@ class Game:
     """State machine: idle -> swap -> (clear -> fall -> clear ...) -> idle."""
 
     def __init__(self, sprites, audio=None, effects=None, backgrounds=None,
-                 skin=None):
+                 skin=None, background_names=None):
         self.normal, self.flame, self.hyper, _ = sprites
         self.anims = effects or {}
         self.backgrounds = backgrounds or []
+        self.background_names = background_names or []
         # flame gems: a glow shaped like the gem, and a travelling glint
         self._blocks = {}
         self.blank_tile = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
@@ -3284,12 +3517,17 @@ class Game:
         self.campaign_level_num = 1
         self.campaign_area = 0
         self.campaign_unlocked = 1
+        # Unlocking stops at the last level, so "cleared" cannot be inferred
+        # from it - level 60 is never < 60. This tracks completion directly.
+        self.campaign_cleared = 0
         self.campaign_open = False
         self.campaign_bg = None
         self.stars = set()             # achievement keys already earned
         self.star_banner = None        # the star being announced, if any
         self.star_buttons = []
         self.star_art = load_star_art()
+        self.star_rects = []           # [(rect, key), ...] for hover detection
+        self.star_hover = None         # key of hovered star, if any
         self.campaign_finale = False   # credits rolling as the campaign end
         self.space_banner = False      # 'new area' notice is showing
         self.campaign_arrows = []
@@ -3525,6 +3763,16 @@ class Game:
         place it is offering rather than on the title backdrop."""
         self.load_campaign_area(self.campaign_area)
         self.audio.use_playlist(CAMPAIGN_MUSIC_MODE)
+
+    def visible_areas(self):
+        """How many areas the player knows about. Space is a secret until it
+        is unlocked, so it is not counted - "AREA 10 OF 11" would have given
+        away that something else was there."""
+        return (len(CAMPAIGN_AREAS) if self.space_unlocked()
+                else len(CAMPAIGN_AREAS) - 1)
+
+    def space_unlocked(self):
+        return self.campaign_unlocked >= AREA_FIRST_LEVEL[SPACE_AREA]
 
     def furthest_area(self):
         """The last area the player may reach.
@@ -4100,7 +4348,7 @@ class Game:
             self.draw_extras(screen)
         if self.campaign_open:
             self.draw_campaign(screen)
-        if self.space_banner:
+        if self.space_banner and not self.star_banner:
             self.draw_space_banner(screen)
         if self.star_banner:
             self.draw_star_banner(screen)
@@ -4152,17 +4400,21 @@ class Game:
         Only earned stars are drawn - an unearned one shows nothing at all
         rather than a placeholder, so the row grows as they are collected
         instead of advertising what is missing.
+        
+        Tracks star rects for hover detection/tooltips.
         """
         earned = [k for k, _, _ in STAR_DEFS if k in self.stars]
+        self.star_rects = []  # clear for this frame
         if not earned:
             return
         size = self.star_size()
         gap = S(14)
         total = len(earned) * size + (len(earned) - 1) * gap
         x = WIDTH // 2 - total // 2
-        for _ in earned:
-            self.draw_star(screen, pygame.Rect(x, cy - size // 2, size, size),
-                           True)
+        for key in earned:
+            rect = pygame.Rect(x, cy - size // 2, size, size)
+            self.draw_star(screen, rect, True)
+            self.star_rects.append((rect, key))
             x += size + gap
 
     @staticmethod
@@ -4187,6 +4439,50 @@ class Game:
             y += image.get_height() + gap
         for button in self.star_buttons:
             button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
+
+    def draw_achievement_tooltip(self, screen):
+        """Draw a tooltip showing achievement name and description when hovering over a star."""
+        if self.star_hover is None:
+            return
+        
+        # Find the achievement definition
+        achievement = None
+        for key, title, description in STAR_DEFS:
+            if key == self.star_hover:
+                achievement = (title, description)
+                break
+        
+        if achievement is None:
+            return
+        
+        title, description = achievement
+        
+        # Render text
+        title_surf = self.font.render(title, True, GOLD)
+        desc_surf = self.font.render(description, True, (200, 200, 200))
+        
+        # Calculate tooltip size
+        padding = S(12)
+        margin = S(8)
+        tooltip_w = max(title_surf.get_width(), desc_surf.get_width()) + padding * 2
+        tooltip_h = title_surf.get_height() + desc_surf.get_height() + margin + padding * 2
+        
+        # Position tooltip above the mouse, centered
+        mouse_x, mouse_y = self.mouse
+        tooltip_x = mouse_x - tooltip_w // 2
+        tooltip_y = mouse_y - tooltip_h - S(10)
+        
+        # Clamp to screen bounds
+        tooltip_x = max(S(10), min(tooltip_x, WIDTH - tooltip_w - S(10)))
+        tooltip_y = max(S(10), tooltip_y)
+        
+        # Draw tooltip background with rounded corners and transparency matching button style
+        bg_rect = pygame.Rect(tooltip_x, tooltip_y, tooltip_w, tooltip_h)
+        screen.blit(translucent(bg_rect.size, PANEL_FILL, PANEL_EDGE, S(12)), bg_rect.topleft)
+        
+        # Draw text
+        screen.blit(title_surf, (tooltip_x + padding, tooltip_y + padding))
+        screen.blit(desc_surf, (tooltip_x + padding, tooltip_y + padding + title_surf.get_height() + margin))
 
     def draw_space_banner(self, screen):
         box = self.space_banner_rect()
@@ -4223,7 +4519,9 @@ class Game:
         title = self.font_big.render("CAMPAIGN", True, TEXT)
         screen.blit(title, (box.x + S(24), box.y + S(22)))
         done = self.font_small.render(
-            f"{self.campaign_unlocked - 1}/{CAMPAIGN_LEVELS}", True, DIM)
+            f"{self.campaign_cleared}/"
+            f"{CAMPAIGN_LEVELS if self.space_unlocked() else MAIN_CAMPAIGN_LEVELS}",
+            True, DIM)
         screen.blit(done, (box.right - S(24) - done.get_width(), box.y + S(28)))
 
         # area name between the arrows
@@ -4232,7 +4530,7 @@ class Game:
         screen.blit(name, (box.centerx - name.get_width() // 2,
                            box.y + S(80)))
         num = self.font_small.render(
-            f"AREA {self.campaign_area + 1} OF {len(CAMPAIGN_AREAS)}", True, DIM)
+            f"AREA {self.campaign_area + 1} OF {self.visible_areas()}", True, DIM)
         screen.blit(num, (box.centerx - num.get_width() // 2, box.y + S(112)))
 
         for i, arrow in enumerate(self.campaign_arrows):
@@ -4274,7 +4572,7 @@ class Game:
             number = self.campaign_level_at(i)
             goal = campaign_level(number)
             locked = number > self.campaign_unlocked
-            beaten = number < self.campaign_unlocked
+            beaten = number <= self.campaign_cleared
             if locked:
                 fill = (255, 255, 255, 12)
             elif beaten:
@@ -4372,6 +4670,7 @@ class Game:
         self.menu_open = False
         self.music_open = False
         self.music_secret = False   # picker showing the hidden folder
+        self.music_picker_mode = "normal"  # "normal" or "timed" playlist
         self.music_title_taps = 0   # taps on the picker title
         self.dragging = None
         self.wants_quit = False
@@ -5175,7 +5474,13 @@ class Game:
         self.music_list = ScrollList((picker.x + S(24), picker.y + S(76),
                                       picker.width - S(48), picker.height - S(150)))
         pw = picker.width - S(48)
+        # Mode selector buttons (Normal and Timed)
+        half_w = (pw - S(8)) // 2
         self.music_buttons = [
+            Button((picker.x + S(24), picker.y + S(50), half_w, S(18)), "NORMAL",
+                   lambda: self.set_music_picker_mode("normal")),
+            Button((picker.x + S(24) + half_w + S(8), picker.y + S(50), half_w, S(18)), "TIMED",
+                   lambda: self.set_music_picker_mode("timed")),
             Button((picker.x + S(24), picker.bottom - S(62), pw, S(44)), "CLOSE",
                    self.close_music,
                    art=self.skinned("menubutton", (pw, S(44))),
@@ -5270,6 +5575,7 @@ class Game:
         self.dragging = None
         self.music_title_taps = 0
         self.music_secret = self.audio.mode == SECRET_MUSIC_MODE
+        self.music_picker_mode = "normal"  # Reset to normal when opening
         self.music_list.items = self.audio.track_names()
         playing = self.audio.now_playing()
         self.music_list.current = (self.music_list.items.index(playing)
@@ -5321,6 +5627,30 @@ class Game:
                                    if playing in self.music_list.items else -1)
         self.music_list.offset = 0.0
 
+    def set_music_picker_mode(self, mode):
+        """Switch music picker between 'normal' (endless) and 'timed' playlists.
+        Does nothing if secret playlist is active."""
+        # Don't switch modes when in secret mode
+        if self.music_secret:
+            self.audio.play("menuclick")
+            return
+        
+        self.music_picker_mode = mode
+        # Temporarily switch the audio mode to get the right playlist
+        old_mode = self.audio.mode
+        old_track = self.audio.track
+        if mode == "timed":
+            self.audio.mode = TIMED_MUSIC_MODE
+        else:
+            self.audio.mode = ENDLESS
+        # Reset track to 0 to avoid index out of range if new playlist is smaller
+        self.audio.track = 0
+        self.refresh_music_list()
+        # Restore the original mode and track
+        self.audio.mode = old_mode
+        self.audio.track = old_track
+        self.audio.play("menuclick")
+
     def overlay_open(self):
         """True when any panel sits above the screen. The title screen's
         first click reveals the mode buttons, and that must not eat clicks
@@ -5368,7 +5698,7 @@ class Game:
         self.dragging = None
         # Generate list of background names
         if self.backgrounds:
-            self.bg_list.items = [f"BG {i+1}" for i in range(len(self.backgrounds))]
+            self.bg_list.items = self.background_names if self.background_names else [f"BG {i+1}" for i in range(len(self.backgrounds))]
             self.bg_list.current = self.bg_index_override if self.bg_index_override is not None else 0
             self.bg_list.offset = 0.0
         self.audio.play("menuclick")
@@ -5442,6 +5772,7 @@ class Game:
             return
         data = read_saves()
         data["campaign"] = {"unlocked": int(self.campaign_unlocked),
+                            "cleared": int(self.campaign_cleared),
                             "stars": sorted(self.stars)}
         write_saves(data)
 
@@ -5451,6 +5782,15 @@ class Game:
             got = entry.get("unlocked")
             if isinstance(got, int):
                 self.campaign_unlocked = max(1, min(CAMPAIGN_LEVELS, got))
+            done = entry.get("cleared")
+            if isinstance(done, int):
+                # Never above the unlocked level: a hand-edited save could
+                # otherwise mark locked levels as CLEAR in the picker.
+                self.campaign_cleared = max(
+                    0, min(CAMPAIGN_LEVELS, self.campaign_unlocked, done))
+            else:
+                # older saves: everything before the unlocked level was beaten
+                self.campaign_cleared = max(0, self.campaign_unlocked - 1)
             known = {k for k, _, _ in STAR_DEFS}
             self.stars = {k for k in entry.get("stars", []) if k in known}
         # open the picker on the area they are actually up to
@@ -5906,7 +6246,20 @@ class Game:
             row = self.music_list.index_at(pos)
             if row >= 0:
                 self.audio.play("menuclick")
-                name = self.audio.play_chosen(row)
+                # In secret mode, don't switch modes - just play from secret playlist
+                if self.music_secret:
+                    name = self.audio.play_chosen(row)
+                else:
+                    # Temporarily set audio mode to get the right playlist
+                    old_mode = self.audio.mode
+                    old_track = self.audio.track
+                    if self.music_picker_mode == "timed":
+                        self.audio.mode = TIMED_MUSIC_MODE
+                    else:
+                        self.audio.mode = ENDLESS
+                    name = self.audio.play_chosen(row)
+                    self.audio.mode = old_mode
+                    self.audio.track = old_track
                 self.music_list.current = row
                 if name:
                     self.note = f"playing {name}"
@@ -5968,6 +6321,18 @@ class Game:
         # Don't allow button hover when duration picker is open
         if self.timed_duration_picker_open:
             return
+        # Check for star hover on title screen (but not when menus are open)
+        if self.on_title and not self.campaign_open and not (self.menu_open or self.music_open 
+                                                               or self.bg_picker_open or self.extras_open 
+                                                               or self.credits_open or self.wipe_open 
+                                                               or self.resume_open or self.star_banner):
+            self.star_hover = None
+            for rect, key in self.star_rects:
+                if rect.collidepoint(pos):
+                    self.star_hover = key
+                    break
+        else:
+            self.star_hover = None
         if self.on_title:
             if self.menu_open:
                 active = []
@@ -6430,7 +6795,24 @@ class Game:
             gained = int(round(gained * campaign_score_multiplier(
                 campaign_area_of(self.campaign_level_num))))
         self.score += gained
-        self.gems_cleared += len(cells)
+        if self.extra("lock"):
+            # Under COLOR LOCK only the paying colour counts towards a
+            # "clear N gems" objective. Counting every cleared cell made the
+            # GEMS LEFT readout race down while the score sat still, which
+            # read as the modifier not applying.
+            self.gems_cleared += sum(
+                1 for r, c in cells
+                if self.grid[r][c] is not None
+                and self.grid[r][c].kind == self.lock_kind)
+        else:
+            self.gems_cleared += len(cells)
+
+        # Show the win the instant the target is met, rather than waiting for
+        # the cascade to finish settling. check_campaign() still runs at the
+        # end of the move for the out-of-moves case.
+        if (self.mode == CAMPAIGN and not self.over
+                and self.goal is not None and self.campaign_done()):
+            self.win_campaign()
 
         self.audio.play_match(self.cascade, self.multi_run)
         for power in spawns.values():
@@ -6514,6 +6896,7 @@ class Game:
 
     def win_campaign(self):
         self.campaign_won = True
+        self.mark_cleared()
         self.unlock_next_level()
         # The last level of The Deep finishes the main run; the last level of
         # Space finishes everything. Unlocking stops at 60, so completing the
@@ -6528,6 +6911,11 @@ class Game:
         self.sel = None
         self.hint = None
         self.menu_open = False
+
+    def mark_cleared(self):
+        if self.campaign_level_num > self.campaign_cleared:
+            self.campaign_cleared = self.campaign_level_num
+            self.save_campaign()
 
     def unlock_next_level(self):
         # Space is not opened by clearing level 50 - the credits do that, so
@@ -7164,8 +7552,22 @@ class Game:
         hint = self.font_small.render("SCROLL WHEEL", True, DIM)
         screen.blit(hint, (box.right - S(24) - hint.get_width(), box.y + S(30)))
         self.music_list.draw(screen, self.font)
-        for button in self.music_buttons:
-            button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
+        # Draw mode selector buttons only when not in secret mode
+        if not self.music_secret:
+            for i, button in enumerate(self.music_buttons):
+                # Skip the CLOSE button (index 2), only draw NORMAL and TIMED
+                if i < 2:
+                    # Highlight the active mode button (Normal or Timed)
+                    if i == 0 and self.music_picker_mode == "normal":
+                        button.hover = True
+                    elif i == 1 and self.music_picker_mode == "timed":
+                        button.hover = True
+                    else:
+                        button.hover = False
+                    button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
+        # Always draw the CLOSE button
+        if len(self.music_buttons) > 2:
+            self.music_buttons[2].draw(screen, self.font, self.hover_lift.get(id(self.music_buttons[2]), 0.0))
 
     def draw_background_picker(self, screen):
         box = self.music_rect()
@@ -7295,11 +7697,13 @@ class Game:
         self.smoke = split_clusters(sheet) if sheet is not None else []
         # A generated fallback is sized to the layer, so it has to be remade
         # when the render scale changes or it covers only part of the frame.
-        loaded = load_backgrounds()
+        loaded, loaded_names = load_backgrounds()
         if loaded:
             self.backgrounds = loaded
+            self.background_names = loaded_names
         elif not self.backgrounds or self.backgrounds[0].get_size() != (WIDTH, HEIGHT):
             self.backgrounds = [fallback_background()]
+            self.background_names = ["Default"]
         self.title_bg = load_title_background()
         # The area backdrop is built to the layer size and converted for the
         # current display format, so it has to be remade here with everything
@@ -7353,6 +7757,19 @@ class Game:
         def place(x, y):
             return x * scale + offset[0], y * scale + offset[1]
 
+        if not under and self.extra("spotlight") and not self.on_title:
+            # The mask inside the 4:3 layer cannot reach the letterbox bars,
+            # so in fullscreen the area either side stayed lit. Black out
+            # everything outside the layer here, in display coordinates.
+            lx, ly = int(offset[0]), int(offset[1])
+            lw, lh = int(WIDTH * scale), int(HEIGHT * scale)
+            for band in (pygame.Rect(0, 0, dw, ly),
+                         pygame.Rect(0, ly + lh, dw, dh - ly - lh),
+                         pygame.Rect(0, ly, lx, lh),
+                         pygame.Rect(lx + lw, ly, dw - lx - lw, lh)):
+                if band.width > 0 and band.height > 0:
+                    surface.fill((0, 0, 0), band)
+
         if under:
             if self.settings.get("particles", True):
                 layer = pygame.Surface((dw, dh), pygame.SRCALPHA)
@@ -7382,7 +7799,10 @@ class Game:
             for piece in self.debris:
                 piece.draw_at(surface, place, scale)
 
-        if self.state == "flyoff":
+        # Flying gems go over the board, but not over an open menu - they are
+        # drawn onto the display AFTER the UI layer, so without this they
+        # sailed across the front of the menu.
+        if self.state == "flyoff" and not self.overlay_veil():
             for flyer in self.flyers:
                 flyer.draw_at(surface, place, scale)
 
@@ -7450,6 +7870,7 @@ class Game:
     def draw(self, screen, background=True):
         if self.on_title:
             self.draw_title(screen, background=background)
+            self.draw_achievement_tooltip(screen)
             return
         offset = self.shake_offset()
         
@@ -7620,7 +8041,10 @@ class Game:
             self.draw_music(screen)
         if self.bg_picker_open:
             self.draw_background_picker(screen)
-        if self.over:
+        # One dialog at a time. Winning the level that earns a star put the
+        # star popup straight on top of the COMPLETE screen, obscuring it;
+        # the finish screen waits its turn instead.
+        if self.over and not self.star_banner:
             self.draw_over(screen)
         if self.star_banner:
             self.draw_star_banner(screen)
@@ -7877,11 +8301,12 @@ def main():
         print("WARNING: SDL_image has no extended format support - only BMP "
               "will load. Backgrounds and gem art will be missing.\n")
     print("Backgrounds:")
-    backgrounds = load_backgrounds()
+    backgrounds, bg_names = load_backgrounds()
     if not backgrounds:
         print("No backgrounds found - using a generated one so the "
               "translucent UI still reads.\n")
         backgrounds = [fallback_background()]
+        bg_names = ["Default"]
     if backgrounds:
         print(f"{len(backgrounds)} backgrounds loaded, one per level\n")
     elif os.path.isdir(BACKGROUND_DIR):
@@ -7893,7 +8318,7 @@ def main():
     elif os.path.isdir(UI_DIR):
         print(f"No skin images found in {UI_DIR}\n")
 
-    game = Game(sprites, audio, effects, backgrounds, skin)
+    game = Game(sprites, audio, effects, backgrounds, skin, bg_names)
     game.display = display
     game.load_settings()
     game.load_campaign()
