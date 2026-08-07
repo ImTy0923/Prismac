@@ -813,6 +813,8 @@ SFX_ALIASES = {
     "hyper":   ("Hypercube", "Hyper", "Supernova", "Explode"),
     "shuffle": ("Shuffle", "Reshuffle", "NoMoves"),
     "levelup": ("LevelUp", "Level", "NextLevel"),
+    "levelcomplete": ("LevelComplete", "LevelCompleted", "LevelDone"),
+    "star": ("Star", "Achievement", "StarEarned"),
     "menuclick": ("MenuClick", "Click", "Button", "UIClick"),
     "go": ("Go", "Start", "Begin"),
     "gameover": ("GameOver", "Lose", "TimeUp"),
@@ -3073,15 +3075,17 @@ class Audio:
 
         multi means the single swap produced two or more separate runs at
         once - an L or T shape, or a move that completed two lines.
+        When multi is True, play both the regular match sound AND the twomatch sound.
         """
         if not self.ok or self.muted:
             return
         if cascade >= 2 and self.snd.get(f"cascade{min(cascade, 6)}") is not None:
             self.play(f"cascade{min(cascade, 6)}")
-        elif multi:
-            self.play("twomatch")
         else:
             self.play("match3")
+        # For two-matches, also play the twomatch sound together
+        if multi:
+            self.play("twomatch")
 
     def apply_volume(self):
         if self.ok:
@@ -4897,6 +4901,18 @@ class Game:
             return self.campaign_area
         return campaign_area_of(self.campaign_level_num)
 
+    def in_space(self):
+        """True only while actually playing a Space level.
+
+        self.campaign_area is the level-select *browsing cursor* - it keeps
+        whatever the player last scrolled to and survives backing out of the
+        picker and starting another mode. Deciding gameplay rules from it
+        leaked Space's difficulty into Endless and Timed, so every rule that
+        asks "am I in Space?" has to go through here instead.
+        """
+        return (self.mode == CAMPAIGN
+                and campaign_area_of(self.campaign_level_num) == SPACE_AREA)
+
     def load_campaign_area(self, area):
         """Swap in one area's backdrop and music."""
         self.campaign_bg = load_campaign_background(area)
@@ -5204,13 +5220,18 @@ class Game:
     def levelup_pause(self):
         """Hold the level-up banner for as long as LevelUp.ogg actually runs,
         so the gems do not start dropping over the top of it."""
-        sound = self.audio.snd.get("levelup") if self.audio.ok else None
+        key = "levelcomplete" if self.mode == CAMPAIGN else "levelup"
+        sound = self.audio.snd.get(key) if self.audio.ok else None
+        if sound is None and self.audio.ok:
+            sound = self.audio.snd.get("levelup")   # campaign falls back
         length = sound.get_length() if sound is not None else 0.0
         return max(LEVELUP_MIN, min(LEVELUP_MAX, length))
 
     def level_target(self):
-        """Points needed to clear the current level."""
-        return int(LEVEL_BASE_TARGET * LEVEL_GROWTH ** (self.level - 1))
+        """Points needed to clear the current level.
+        Space area levels have 1.25x difficulty multiplier."""
+        multiplier = 1.25 if self.in_space() else 1.0
+        return int(LEVEL_BASE_TARGET * LEVEL_GROWTH ** (self.level - 1) * multiplier)
 
     def level_progress(self):
         earned = self.score - self.level_floor
@@ -5270,7 +5291,11 @@ class Game:
         self.state = "banner"
         self.t = 0.0
         self.flyers = []
-        self.audio.play("levelup")
+        # Play levelcomplete in campaign mode, levelup for other modes
+        if self.mode == CAMPAIGN:
+            self.audio.play("levelcomplete")
+        else:
+            self.audio.play("levelup")
 
     def banner_length(self):
         return BANNER_IN + BANNER_HOLD + BANNER_OUT + DROP_PAUSE
@@ -5369,6 +5394,10 @@ class Game:
                 (key, pygame.Rect(sx, box.y + S(226) + i * EXTRA_ROW,
                                   sw, EXTRA_ROW - S(6)), label, blurb))
         self.setting_buttons = []
+        # Read by widget_at() when settings_open is True. Nothing sets that
+        # flag today, so the branch is dead - but an empty list here means
+        # re-enabling the screen cannot raise AttributeError.
+        self.setting_sliders = []
 
         # Zoom chips, built on demand and only while fullscreen. The band they
         # sit in is reserved unconditionally so the buttons underneath keep one
@@ -5547,6 +5576,10 @@ class Game:
     # -- button actions ---------------------------------------------------
 
     def show_hint(self):
+        # No hints in Space area - it's brutal!
+        if self.in_space():
+            self.audio.play("menuclick")
+            return
         if self.over or self.state != "idle":
             return
         self.hint = find_hint(self.grid)
@@ -5747,7 +5780,7 @@ class Game:
             return False
         self.stars.add(key)
         self.star_banner = key
-        self.audio.play("levelup")
+        self.audio.play("star")
         self.save_campaign()
         return True
 
@@ -5985,7 +6018,6 @@ class Game:
             return
         self.rebuild_at_scale(factor)
         self.settings["render_scale"] = factor
-        self.note = f"render scale {int(factor * 100)}%"
         self.save_settings()
 
     def rebuild_at_scale(self, factor):
@@ -6261,8 +6293,6 @@ class Game:
                     self.audio.mode = old_mode
                     self.audio.track = old_track
                 self.music_list.current = row
-                if name:
-                    self.note = f"playing {name}"
             elif not self.music_rect().collidepoint(pos):
                 self.audio.play("menuclick")
                 self.close_music()
@@ -6745,6 +6775,9 @@ class Game:
         self.matched = cells
         self.spawns = spawns
         self.award_time(cells)
+        # Add camera shake in spotlight mode - reveals more of the board
+        if self.extra("spotlight"):
+            self.add_shake(0.25)
         explosive_cells = set()
         for r, c in cells:
             gem = self.grid[r][c]
@@ -6814,7 +6847,10 @@ class Game:
                 and self.goal is not None and self.campaign_done()):
             self.win_campaign()
 
-        self.audio.play_match(self.cascade, self.multi_run)
+        # Only play match sound if no explosive gems were created
+        # If explosives were created, only play the gem creation sound instead
+        if not spawns:
+            self.audio.play_match(self.cascade, self.multi_run)
         for power in spawns.values():
             self.audio.play("hypermade" if power == HYPER else "flamemade")
         flames = [rc for rc in cells
@@ -6906,7 +6942,7 @@ class Game:
         elif self.campaign_level_num == CAMPAIGN_LEVELS:
             self.award_star("space")
         self.set_note("LEVEL COMPLETE")
-        self.audio.play("levelup")
+        self.audio.play("levelcomplete")
         self.over = True
         self.sel = None
         self.hint = None
@@ -7125,6 +7161,15 @@ class Game:
         if self.state == "idle" and self.sel == (r, c):
             return x, y, self.selection_pulse()
 
+        # Add subtle sway to hyper/rainbow gems to show they're special.
+        # Idle only: applying it during swap/fall/clear fought those tweens
+        # and left settled gems never quite sitting flush in their cell.
+        if self.state == "idle":
+            gem = self.grid[r][c]
+            if (gem is not None and gem.cell_type == CELL_GEM
+                    and gem.power == HYPER):
+                y += math.sin(self.time * 2.0 + r * 0.1 + c * 0.1) * S(2)
+
         if (self.state == "rainbow" and (r, c) == self.rainbow_origin
                 and self.t < RAINBOW_CHARGE):
             # the gem rattles harder as it winds up
@@ -7296,8 +7341,24 @@ class Game:
                 screen, x, PANEL_Y + (S(186) if self.timed else S(116)), width)
 
         for button in self.panel_buttons():
-            button.draw(screen, self.font,
-                        self.hover_lift.get(id(button), 0.0))
+            # Grey out HINT button in Space area
+            if button.label == "HINT" and self.in_space():
+                # Draw the button with reduced alpha/greyed appearance
+                font = button.fit(self.font, button.label, button.rect.width - S(14))
+                rect = button.rect
+                # Always use normal button state (not hover)
+                screen.blit(translucent(rect.size, BTN, PANEL_EDGE, S(10)), rect.topleft)
+                if button.accent:
+                    # Grey out the accent bar
+                    pygame.draw.rect(screen, (80, 80, 80),
+                                     (rect.x, rect.y + S(8), S(3), rect.height - S(16)),
+                                     border_radius=S(2))
+                # Render text in grey
+                text = font.render(button.label, True, (120, 120, 140))
+                screen.blit(text, text.get_rect(center=rect.center))
+            else:
+                button.draw(screen, self.font,
+                            self.hover_lift.get(id(button), 0.0))
 
     def blit_readout(self, screen, text, x, y, width, colour):
         """The big number on the panel, shrunk until it fits.
