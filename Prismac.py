@@ -80,7 +80,14 @@ BASE_GEM_PAD = 3
 BASE_PANEL_W = 248
 BASE_PANEL_Y = 30
 BASE_EXTRA_ROW = 52
-BASE_FONTS = {"huge": 7, "score": 5, "big": 3, "body": 2, "small": 2}
+# Menu toggle rows are single-line, so they need much less height than the
+# two-line extras rows.
+SETTING_ROW = 38
+BASE_FONTS = {"huge": 7, "score": 5, "big": 3, "body": 2, "small": 2,
+              # The smallest the 5x7 face goes. Only the FPS readout
+              # uses it - anything longer than a couple of digits is
+              # too small to read at this size.
+              "tiny": 1}
 
 RENDER_SCALE = 1.0
 
@@ -154,6 +161,23 @@ DEFAULT_RENDER_SCALE = 1.00
 HINT_SECONDS = 4.0          # how long a hint stays lit
 
 FPS = 60
+
+# Frame rate choices. None means "let the display drive it" - the window is
+# opened with vsync and the loop stops capping, so it runs at whatever the
+# monitor refreshes at. The rest are hard caps handed to Clock.tick().
+FPS_OPTIONS = (
+    (None, "VSYNC"),
+    (30, "30"), (60, "60"), (120, "120"),
+    (144, "144"), (165, "165"), (240, "240"), (360, "360"),
+)
+DEFAULT_FPS = 60
+
+
+def fps_label(value):
+    for cap, label in FPS_OPTIONS:
+        if cap == value:
+            return label
+    return str(value)
 
 # progression
 LEVEL_BASE_TARGET = 1500   # points needed to clear level 1 (massively increased from 1200 for extreme difficulty)
@@ -662,6 +686,7 @@ SETTING_DEFS = (
     ("smooth",      "SMOOTH ANIMATION", "Smooth Gem Animations"),
     ("shake",     "CAMERA SHAKE",        "Screen Shakes on Explosions"),
     ("particles", "BACKGROUND PARTICLES", "Small Particle Effects"),
+    ("showfps",   "SHOW FPS",             "Counter In The Corner"),
 )
 
 # Resolution options for the game window
@@ -806,6 +831,13 @@ PANEL_EDGE = (108, 128, 196, 160)
 # it, but a menu you are reading needs to be solid.
 DIALOG_FILL = (20, 25, 44, 255)
 DIALOG_EDGE = (84, 100, 152, 190)
+# The big "pick something" screens - resume, timed duration, extras and the
+# campaign level selectors - take over the whole view rather than sitting in a
+# corner, and reading them against a flat slab hid the artwork completely.
+# These keep some backdrop showing through, and are passed solid=False so the
+# reduce-transparency option leaves them alone: forcing them to 255 is exactly
+# what made them opaque.
+PICKER_FILL = (20, 25, 44, 214)
 BOARD_FILL = _glass((26, 31, 54), 230)
 CELL_HI = (140, 168, 255, 20)          # the lighter checker squares
 BTN = _glass((48, 58, 96), 248)
@@ -4074,6 +4106,7 @@ class Game:
         # NOT in reset(), so nothing can put the game back together.
         self.doom = False
         self.doom_t = 0.0
+        self.fps_now = 0.0
         self.dead_hint_taps = 0
         self.stars = set()             # achievement keys already earned
         self.star_banner = None        # the star being announced, if any
@@ -4092,13 +4125,14 @@ class Game:
         self.extras_note = ""
         # everything on by default except fullscreen, which should not be
         # forced on someone the first time they launch the game
-        self.settings = {k: k not in ("fullscreen", "opaque")
+        self.settings = {k: k not in ("fullscreen", "opaque", "showfps")
                          for k, _, _ in SETTING_DEFS}
         if MAC_WINDOWED_ONLY:
             for key in MAC_UNSUPPORTED:
                 self.settings[key] = False
             for key in MAC_FORCED_ON:
                 self.settings[key] = True
+        self.settings["fps"] = DEFAULT_FPS
         if not BACKDROPS_OK:
             self.settings["backgrounds"] = False
         self.settings_open = False
@@ -4156,6 +4190,7 @@ class Game:
         self.font_big = load_font(font_scale("big"), bold=True)
         self.font = load_font(font_scale("body"))
         self.font_small = load_font(font_scale("small"))
+        self.font_tiny = load_font(font_scale("tiny"))
 
     def build_title(self):
         """Title art with a soft dark halo, so it reads on any background."""
@@ -4440,8 +4475,9 @@ class Game:
                 os.remove(path)
             except OSError:
                 pass
-        self.settings = {k: k not in ("fullscreen", "opaque")
+        self.settings = {k: k not in ("fullscreen", "opaque", "showfps")
                          for k, _, _ in SETTING_DEFS}
+        self.settings["fps"] = DEFAULT_FPS
         if not BACKDROPS_OK:
             self.settings["backgrounds"] = False
         if self.display is not None:
@@ -4541,7 +4577,7 @@ class Game:
 
     def draw_resume(self, screen):
         box = self.resume_rect()
-        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
+        screen.blit(translucent(box.size, PICKER_FILL, DIALOG_EDGE, S(16), solid=False),
                     box.topleft)
         entry = read_saves().get(self.resume_mode) or {}
         lines = [(self.font_big, "CONTINUE?", TEXT),
@@ -4572,7 +4608,7 @@ class Game:
 
     def draw_duration_picker(self, screen):
         box = self.duration_picker_rect()
-        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
+        screen.blit(translucent(box.size, PICKER_FILL, DIALOG_EDGE, S(16), solid=False),
                     box.topleft)
         title = self.font_big.render("SELECT DURATION", True, TEXT)
         screen.blit(title, (box.centerx - title.get_width() // 2, box.y + S(20)))
@@ -4772,6 +4808,14 @@ class Game:
             if isinstance(rs, (int, float)) and any(
                     abs(rs - f) < 0.01 for f, _ in SCALE_OPTIONS):
                 self.settings["render_scale"] = float(rs)
+            # None is a legitimate value - it means VSYNC - so this tests for
+            # the key rather than for truthiness. Reading it with .get() would
+            # make a save written before this option existed look like a
+            # request for vsync.
+            if "fps" in stored:
+                cap = stored["fps"]
+                if any(cap == option for option, _ in FPS_OPTIONS):
+                    self.settings["fps"] = cap
         if MAC_WINDOWED_ONLY:
             # A save written on another machine, or before this build, could
             # switch these back on.
@@ -5217,7 +5261,8 @@ class Game:
         supposed to say. The whole panel is torn apart before it is blitted."""
         box = self.secret_rect()
         panel = pygame.Surface(box.size, pygame.SRCALPHA)
-        panel.blit(translucent(box.size, DIALOG_FILL, (232, 40, 90, 250), S(16)),
+        panel.blit(translucent(box.size, PICKER_FILL, (232, 40, 90, 250), S(16),
+                               solid=False),
                    (0, 0))
 
         title = self.font_big.render(glitch_text(9, salt=1, clock=self.time),
@@ -5260,7 +5305,7 @@ class Game:
 
     def draw_campaign(self, screen):
         box = self.campaign_rect()
-        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
+        screen.blit(translucent(box.size, PICKER_FILL, DIALOG_EDGE, S(16), solid=False),
                     box.topleft)
         title = self.font_big.render("CAMPAIGN", True, TEXT)
         screen.blit(title, (box.x + S(24), box.y + S(22)))
@@ -5358,7 +5403,7 @@ class Game:
 
     def draw_extras(self, screen):
         box = self.extras_rect()
-        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
+        screen.blit(translucent(box.size, PICKER_FILL, DIALOG_EDGE, S(16), solid=False),
                     box.topleft)
         title = self.font_big.render("EXTRAS", True, TEXT)
         screen.blit(title, (box.x + S(26), box.y + S(24)))
@@ -6141,15 +6186,15 @@ class Game:
         box = self.menu_rect()
         sx, sw = box.x + S(30), box.width - S(60)
         self.sliders = [
-            Slider((sx, box.y + S(104), sw, S(8)), "MUSIC",
+            Slider((sx, box.y + S(92), sw, S(8)), "MUSIC",
                    lambda: self.audio.music_volume, self.audio.set_music_volume),
-            Slider((sx, box.y + S(168), sw, S(8)), "SOUND EFFECTS",
+            Slider((sx, box.y + S(148), sw, S(8)), "SOUND EFFECTS",
                    lambda: self.audio.sfx_volume, self.audio.set_sfx_volume),
         ]
-        # graphics toggles sit between the sliders and the buttons
-        # These three lean on the compositing the macOS path deliberately does
-        # not do, so they are shown as unavailable rather than silently doing
-        # nothing when clicked.
+        # Graphics toggles sit between the sliders and the buttons, one line
+        # each. SETTING_ROW is deliberately shorter than EXTRA_ROW: these are
+        # single-line rows now, and reusing the two-line height left the menu
+        # looking half empty and pushed everything below it off the box.
         self.setting_rows = []
         for i, (key, label, blurb) in enumerate(SETTING_DEFS):
             if MAC_WINDOWED_ONLY and key in MAC_UNSUPPORTED:
@@ -6157,19 +6202,26 @@ class Game:
             elif MAC_WINDOWED_ONLY and key in MAC_FORCED_ON:
                 blurb = "Always On For MacOS"
             self.setting_rows.append(
-                (key, pygame.Rect(sx, box.y + S(226) + i * EXTRA_ROW,
-                                  sw, EXTRA_ROW - S(6)), label, blurb))
+                (key, pygame.Rect(sx, box.y + S(188) + i * S(SETTING_ROW),
+                                  sw, S(SETTING_ROW) - S(6)), label, blurb))
         self.setting_buttons = []
         # Read by widget_at() when settings_open is True. Nothing sets that
         # flag today, so the branch is dead - but an empty list here means
         # re-enabling the screen cannot raise AttributeError.
         self.setting_sliders = []
 
+        # Frame rate chips. Eight options do not fit on one line at this width,
+        # so they wrap onto two rows of four.
+        self.fps_buttons = []
+        self.fps_band_y = self.setting_rows[-1][1].bottom + S(30)
+        self.fps_band_h = S(36) * 2 + S(8)
+        self.build_fps_buttons()
+
         # Zoom chips, built on demand and only while fullscreen. The band they
         # sit in is reserved unconditionally so the buttons underneath keep one
         # fixed home - moving them around was what broke their hitboxes.
         self.scale_buttons = []
-        self.scale_band_y = self.setting_rows[-1][1].bottom + S(34)
+        self.scale_band_y = self.fps_band_y + self.fps_band_h + S(28)
         self.scale_band_h = S(42)
 
         half = (sw - S(20)) // 2
@@ -6336,8 +6388,8 @@ class Game:
     @staticmethod
     def menu_rect():
         # Wide enough for a row of four zoom chips, tall enough for the
-        # buttons underneath them.
-        return pygame.Rect(WIDTH // 2 - S(330), S(8), S(660), S(768))
+        # sliders, seven toggles, two chip bands and the buttons underneath.
+        return pygame.Rect(WIDTH // 2 - S(330), S(6), S(660), S(792))
 
     # -- button actions ---------------------------------------------------
 
@@ -6783,6 +6835,7 @@ class Game:
             self.close_campaign()
         self.sync_menu_labels()
         self.build_scale_buttons()  # rebuild scale buttons whenever menu opens
+        self.build_fps_buttons()    # and the frame-rate chips, for the highlight
         # the menu takes over: nothing else stays open behind it
         self.music_open = False
         self.bg_picker_open = False
@@ -6794,6 +6847,45 @@ class Game:
         self.menu_open = True
         self.sel = None
         self.dragging = None
+
+    def build_fps_buttons(self):
+        """Frame-rate chips, four to a row across two rows."""
+        self.fps_buttons = []
+        box = self.menu_rect()
+        sx, sw = box.x + S(30), box.width - S(60)
+        current = self.settings.get("fps", DEFAULT_FPS)
+
+        per_row, gap, height = 4, S(8), S(36)
+        btn_w = (sw - gap * (per_row - 1)) // per_row
+        for i, (cap, label) in enumerate(FPS_OPTIONS):
+            row, col = divmod(i, per_row)
+            on = cap == current
+            self.fps_buttons.append(Button(
+                (sx + col * (btn_w + gap),
+                 self.fps_band_y + row * (height + gap), btn_w, height),
+                label, (lambda c=cap: self.set_fps(c)),
+                accent=GOLD if on else None))
+
+    def set_fps(self, cap):
+        """Pick a frame cap. None means follow the display's own refresh.
+
+        Switching to or from VSYNC has to re-open the window: vsync is a
+        set_mode flag and cannot be changed on a live surface. The other caps
+        are just a number for Clock.tick(), so they need no rebuild at all.
+        """
+        was_vsync = self.settings.get("fps", DEFAULT_FPS) is None
+        self.settings["fps"] = cap
+        if was_vsync != (cap is None) and self.display is not None:
+            self.display.set_fullscreen(self.display.fullscreen, self)
+            self.build_scale_buttons()
+        self.build_fps_buttons()
+        self.audio.play("menuclick")
+        self.save_settings()
+
+    def frame_cap(self):
+        """What to hand Clock.tick(). 0 lets it run uncapped under vsync."""
+        cap = self.settings.get("fps", DEFAULT_FPS)
+        return 0 if cap is None else cap
 
     def build_scale_buttons(self):
         """Render-scale chips, laid into the reserved band. Fullscreen only."""
@@ -6910,6 +7002,35 @@ class Game:
             # written; the process simply stops existing.
             os._exit(1)
 
+    def draw_fps(self, screen):
+        """The frame counter, top right, over everything.
+
+        Takes the DISPLAY surface rather than the 4:3 layer, and is called
+        last in present(), so it sits above the board, the panel, every menu
+        and dialog, and the letterbox bars - and is never scaled with the
+        layer, which keeps it crisp and the same size at any resolution.
+        """
+        if not self.settings.get("showfps", False):
+            return
+        text = f"{int(round(self.fps_now))}"
+        image = self.font_tiny.render(text, True, (255, 255, 255))
+        # Positioned against the DISPLAY surface, so in fullscreen it sits at
+        # the true right edge of the panel rather than at the edge of the 4:3
+        # layer - on a 16:10 screen those are hundreds of pixels apart. The
+        # inset is a hair off the corner so the glyphs are not clipped by
+        # rounding at odd scales.
+        pad = max(1, S(3))
+        w, h = screen.get_size()
+        x = w - image.get_width() - pad
+        y = pad
+        # A dark plate behind it: white numerals over a pale backdrop or the
+        # white PRISMAC logo were unreadable without one.
+        plate = pygame.Surface((image.get_width() + pad * 2,
+                                image.get_height() + pad * 2), pygame.SRCALPHA)
+        plate.fill((0, 0, 0, 110))
+        screen.blit(plate, (x - pad, y - pad))
+        screen.blit(image, (x, y))
+
     def draw_doom(self, screen):
         screen.fill((0, 0, 0))
         image = self.font_huge.render(SECRET_DOOM_TEXT, True, (190, 0, 0))
@@ -6991,7 +7112,7 @@ class Game:
                 for slider in self.sliders:
                     if slider.hit(pos):
                         return slider
-                for button in self.scale_buttons:
+                for button in self.fps_buttons + self.scale_buttons:
                     if button.hit(pos):
                         return button
                 for button in self.menu_buttons:
@@ -7022,7 +7143,7 @@ class Game:
             for slider in self.sliders:
                 if slider.hit(pos):
                     return slider
-            for button in self.scale_buttons:
+            for button in self.fps_buttons + self.scale_buttons:
                 if button.hit(pos):
                     return button
             for button in self.menu_buttons:
@@ -7290,7 +7411,7 @@ class Game:
         for button in (self.buttons + self.campaign_panel + self.finish_buttons()
                        + self.menu_buttons + self.over_buttons
                        + self.title_buttons + self.music_buttons
-                       + self.extra_buttons + self.scale_buttons
+                       + self.extra_buttons + self.scale_buttons + self.fps_buttons
                        + self.setting_buttons + self.credit_buttons
                        + self.resume_buttons + self.wipe_buttons + self.duration_buttons
                        + self.campaign_arrows + self.campaign_buttons
@@ -7332,6 +7453,10 @@ class Game:
         self.grid[r1][c1], self.grid[r2][c2] = self.grid[r2][c2], self.grid[r1][c1]
 
     def update(self, dt):
+        # Smoothed so the readout is legible. A raw 1/dt reading jitters by
+        # tens of frames between ticks and is unreadable.
+        if dt > 0:
+            self.fps_now += (1.0 / dt - self.fps_now) * min(1.0, dt * 4.0)
         if self.doom:
             # Nothing else ticks: no board, no timer, no animations.
             self.update_doom(dt)
@@ -8703,37 +8828,20 @@ class Game:
 
         # ESC TO CLOSE hint removed
 
-        for key, rect, label, blurb in self.setting_rows:
-            on = self.settings.get(key, True)
-            screen.blit(translucent(rect.size,
-                                    ROW_ON if on else ROW_OFF,
-                                    None, S(8)), rect.topleft)
-            tick = pygame.Rect(rect.x + S(8), rect.centery - S(10), S(20), S(20))
-            pygame.draw.rect(screen, TEXT if on else DIM, tick, max(1, S(2)),
-                             border_radius=S(4))
-            if on:
-                pygame.draw.line(screen, GOLD, (tick.x + S(4), tick.centery),
-                                 (tick.centerx, tick.bottom - S(5)), S(3))
-                pygame.draw.line(screen, GOLD, (tick.centerx, tick.bottom - S(5)),
-                                 (tick.right - S(3), tick.y + S(3)), S(3))
-            name = self.font.render(label, True, TEXT if on else DIM)
-            screen.blit(name, (rect.x + S(38), rect.y + S(5)))
-            note = Button.fit(self.font_small, blurb, rect.width - S(46))
-            screen.blit(note.render(blurb, True, DIM),
-                        (rect.x + S(38), rect.y + S(5) + name.get_height() + S(4)))
 
         for slider in self.sliders:
             slider.draw(screen, self.font, self.font_small,
                         dragging=self.dragging is slider)
 
         head = self.font_small.render("GRAPHICS", True, DIM)
-        screen.blit(head, (box.x + S(30), box.y + S(210)))
+        screen.blit(head, (box.x + S(30), box.y + S(172)))
         for key, rect, label, blurb in self.setting_rows:
             on = self.settings.get(key, True)
+            gated = MAC_WINDOWED_ONLY and key in MAC_UNSUPPORTED + MAC_FORCED_ON
             screen.blit(translucent(rect.size,
                                     ROW_ON if on else ROW_OFF,
                                     None, S(8)), rect.topleft)
-            tick = pygame.Rect(rect.x + S(8), rect.centery - S(10), S(20), S(20))
+            tick = pygame.Rect(rect.x + S(8), rect.centery - S(9), S(18), S(18))
             pygame.draw.rect(screen, TEXT if on else DIM, tick, max(1, S(2)),
                              border_radius=S(4))
             if on:
@@ -8741,11 +8849,26 @@ class Game:
                                  (tick.centerx, tick.bottom - S(5)), S(3))
                 pygame.draw.line(screen, GOLD, (tick.centerx, tick.bottom - S(5)),
                                  (tick.right - S(3), tick.y + S(3)), S(3))
-            name = self.font.render(label, True, TEXT if on else DIM)
-            screen.blit(name, (rect.x + S(38), rect.y + S(5)))
-            note = Button.fit(self.font_small, blurb, rect.width - S(46))
-            screen.blit(note.render(blurb, True, DIM),
-                        (rect.x + S(38), rect.y + S(5) + name.get_height() + S(4)))
+            # One line per toggle. Every row used to carry a description
+            # underneath, which doubled the height of the section and said
+            # little the label did not already say. The note is kept only when
+            # it reports something the tick cannot - that the option is locked
+            # by the platform.
+            name = Button.fit(self.font, label, rect.width - S(56))
+            image = name.render(label, True, TEXT if on else DIM)
+            screen.blit(image, (rect.x + S(34),
+                                rect.centery - image.get_height() // 2))
+            if gated:
+                note = Button.fit(self.font_small, blurb, rect.width - S(56))
+                shown = note.render(blurb, True, DIM)
+                screen.blit(shown, (rect.right - S(10) - shown.get_width(),
+                                    rect.centery - shown.get_height() // 2))
+
+        head = self.font_small.render("FRAME RATE", True, DIM)
+        screen.blit(head, (box.x + S(30), self.fps_band_y - S(20)))
+        for button in self.fps_buttons:
+            button.draw(screen, self.font_small,
+                        self.hover_lift.get(id(button), 0.0))
 
         if self.scale_buttons:
             head = self.font_small.render("RESOLUTION", True, DIM)
@@ -9195,9 +9318,14 @@ class Display:
     a wide screen shows more background rather than distorted gems.
     """
 
-    def __init__(self, fullscreen=False):
+    def __init__(self, fullscreen=False, vsync=False):
         self.fullscreen = False
         self.surface = None
+        # Whether the window was opened asking for vsync. The Display is built
+        # before the Game, so the saved preference has to be handed in here -
+        # otherwise the first window ignores it and only a later toggle in the
+        # menu would take effect.
+        self.vsync = bool(vsync)
         self.layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         self._cover_cache = {}
         self._scaled = None
@@ -9229,10 +9357,22 @@ class Display:
         if MAC_WINDOWED_ONLY:
             on = False          # windowed only - see MAC_WINDOWED_ONLY
         self.fullscreen = on
-        if on:
-            self.surface = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
-        else:
-            self.surface = pygame.display.set_mode((WIDTH, HEIGHT))
+        # vsync has to be asked for when the mode is set; it cannot be turned
+        # on later. Not every driver grants it, so a refusal falls back to a
+        # plain mode rather than leaving the game with no window at all.
+        if game is not None:
+            self.vsync = game.settings.get("fps", DEFAULT_FPS) is None
+        # Explicitly 0 for every capped option, not merely "left out". Some
+        # drivers vsync by default, which pinned the frame rate to the
+        # monitor's refresh and made 144/240/360 unreachable on a 60Hz panel
+        # no matter what Clock.tick was told.
+        want_vsync = 1 if self.vsync else 0
+        size = (0, 0) if on else (WIDTH, HEIGHT)
+        flags = pygame.FULLSCREEN if on else 0
+        try:
+            self.surface = pygame.display.set_mode(size, flags, vsync=want_vsync)
+        except (pygame.error, TypeError):
+            self.surface = pygame.display.set_mode(size, flags)
         self.recompute()
         self.layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         self._scaled = None
@@ -9612,6 +9752,7 @@ class Display:
             # usual transparent clear would black it out on an opaque target.
             game.draw(self.surface, background=False, clear=False)
             game.draw_wide(self.surface, 1.0, (0, 0), under=False)
+            game.draw_fps(self.surface)      # last: above every layer
             pygame.display.flip()
             return
         self.surface.fill(BG)
@@ -9660,6 +9801,7 @@ class Display:
             self.surface.blit(self.scale_layer(size), self.offset)
 
         game.draw_wide(self.surface, self.scale, self.offset, under=False)
+        game.draw_fps(self.surface)          # last: above every layer
         pygame.display.flip()
 
 
@@ -9806,7 +9948,10 @@ def main():
     if (want_fullscreen and isinstance(want_scale, (int, float))
             and any(abs(want_scale - f) < 0.01 for f, _ in SCALE_OPTIONS)):
         apply_render_scale(float(want_scale))
-    display = Display(fullscreen=want_fullscreen)
+    # VSYNC is stored as None, so this asks whether the key is present AND
+    # null - a missing key means the default cap, not vsync.
+    want_vsync = "fps" in prefs and prefs["fps"] is None
+    display = Display(fullscreen=want_fullscreen, vsync=want_vsync)
     clock = pygame.time.Clock()
 
     # ---- phase 1: just enough to put the title on screen ---------------
@@ -9903,7 +10048,9 @@ def main():
     loader.finish()
 
     while True:
-        dt = min(clock.tick(FPS) / 1000.0, 0.05)
+        # The cap comes from the menu. 0 means uncapped, which under vsync
+        # leaves the pacing to the display.
+        dt = min(clock.tick(game.frame_cap()) / 1000.0, 0.05)
 
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
