@@ -176,8 +176,8 @@ CAMPAIGN_MUSIC_MODE = "campaignmusic"   # the current area's own tracks
 # campaign/ - campaign/Beach/ holds that area's backdrop and music. The one
 # exception is the Unknown Planet, which lives inside campaign/Space/.
 CAMPAIGN_AREAS = (
-    "Beach", "Dock", "City", "Forest", "Mine",
-    "Cave", "Crystal Cavern", "Volcanic Core", "Underground City", "The Deep",
+    "Beach", "Mountain", "City", "Forest", "Mine",
+    "Cave", "Crystal Cavern", "Volcanic Core", "Underground City", "The Dungeon",
     "Space", "Unknown Planet...", "secret",
 )
 LEVELS_PER_AREA = 5
@@ -208,6 +208,14 @@ SECRET_LEVEL = AREA_FIRST_LEVEL[SECRET_AREA]   # 71
 # off THIS, not CAMPAIGN_LEVELS, so the secret area can sit in the same
 # numbering without ever unlocking itself or being counted as progress.
 LAST_NORMAL_LEVEL = SECRET_LEVEL - 1        # 70
+# How far the secret level pulls its gems towards grey. Muted, not mono - the
+# colours still have to be told apart to play the board.
+SECRET_DESATURATION = 0.62
+# Keep playing the level whose score readout reads ERROR and it stops
+# pretending. At this many points everything goes away.
+SECRET_DOOM_SCORE = 7500
+SECRET_DOOM_TEXT = "DO NOT COME BACK"
+SECRET_DOOM_SECONDS = 7.0
 MAIN_CAMPAIGN_LEVELS = AREA_FIRST_LEVEL[SPACE_AREA] - 1   # 50, before Space
 # The boundary between the two post-campaign pages. They are priced as one
 # continuous run, so it is worth having a name for where the first one ends.
@@ -291,7 +299,7 @@ CAMPAIGN_SCORE_BONUS = 0.14        # per area, compounding on the base score
 # (key, title shown when it is won, how it is earned)
 STAR_DEFS = (
     ("endless100", "ENDLESS 100", "REACHED LEVEL 100 IN ''ENDLESS''"),
-    ("deep",       "MUST GO DEEPER",  "CLEARED ''THE DEEP'' IN CAMPAIGN"),
+    ("deep",       "MUST GO DEEPER",  "CLEARED ''THE DUNGEON'' IN CAMPAIGN"),
     # Deliberately vague: this star now needs the final level of the Unknown
     # Planet, and the tooltip is visible from the title screen long before
     # that area exists. Naming it there would give the secret away.
@@ -738,6 +746,33 @@ BG_CROSSFADE = 2.6         # seconds for the new level backdrop to slide up
 # environment variable PRISMAC_NO_BACKDROPS=1 to turn them off again.
 IS_MACOS = sys.platform == "darwin"
 BACKDROPS_OK = os.environ.get("PRISMAC_NO_BACKDROPS", "") not in ("1", "true")
+
+# macOS is windowed-only.
+#
+# This build of SDL discards a surface's per-pixel alpha on a plain blit: a
+# layer pixel reading (0,0,0,0) lands on the screen as opaque black. That is
+# what put a black slab over the 4:3 area. Every workaround for it - probing
+# for a scaler that survives, flattening the frame before scaling - either
+# failed or cost image quality, and the probe reported success on the very
+# blit that then failed.
+#
+# So the whole transparent-layer-over-backdrop technique is skipped here. The
+# window is opened at exactly the layer size and the game draws itself, its
+# backdrop included, straight onto the display as one opaque frame. There is
+# no letterbox, no scaling, and no alpha for SDL to lose.
+MAC_WINDOWED_ONLY = sys.platform == "darwin"
+
+# Settings that are unavailable on the macOS path. Fullscreen needs the
+# letterbox compositing; camera shake and smooth animation both need a
+# translucent surface blitted over the frame. Background particles are NOT in
+# here - they are painted straight onto the opaque frame and work fine.
+MAC_UNSUPPORTED = ("fullscreen", "shake", "smooth")
+
+# Forced ON on macOS. The opaque path draws one flat frame, and the glassy
+# panels were tuned against a compositing pipeline; solid chrome is both what
+# that path renders best and what stays readable over any backdrop.
+MAC_FORCED_ON = ("opaque",)
+
 BOMB_FUSE_MIN = 4
 BOMB_FUSE_MAX = 6
 
@@ -765,21 +800,33 @@ def _glass(rgb, base_alpha):
     return rgb + (int(base_alpha * (1.0 - 0.62 * clamp01(GLASS))),)
 
 
-PANEL_FILL = _glass((34, 40, 66), 236)
-PANEL_EDGE = (108, 128, 196, 130)
+PANEL_FILL = _glass((34, 40, 66), 245)
+PANEL_EDGE = (108, 128, 196, 160)
 # Dialog boxes are NOT glass: the side panel wants to show the board through
 # it, but a menu you are reading needs to be solid.
-DIALOG_FILL = (28, 33, 56, 250)
-DIALOG_EDGE = (128, 148, 214, 190)
-BOARD_FILL = _glass((26, 31, 54), 218)
+DIALOG_FILL = (20, 25, 44, 255)
+DIALOG_EDGE = (84, 100, 152, 190)
+BOARD_FILL = _glass((26, 31, 54), 230)
 CELL_HI = (140, 168, 255, 20)          # the lighter checker squares
-BTN = _glass((48, 58, 96), 238)
-BTN_HOVER = _glass((72, 88, 140), 248)
-BTN_DOWN = _glass((34, 42, 72), 248)
+BTN = _glass((48, 58, 96), 248)
+BTN_HOVER = _glass((72, 88, 140), 255)
+BTN_DOWN = _glass((34, 42, 72), 255)
 TEXT = (232, 238, 255)
 DIM = (146, 158, 196)
 GOLD = (240, 202, 120)
 HINT_COLOR = (120, 232, 224)
+# Selected / cleared / toggled-on rows. A saturated fill drowned the tick and
+# the CLEAR label sitting on top of it, so these are dark navy and the state
+# is read from the tick, not the slab.
+ROW_ON = (34, 44, 80, 220)             # toggled on, or the level to play next
+ROW_DONE = (19, 24, 45, 220)           # a level already cleared, clearly darker
+ROW_OFF = (19, 23, 42, 190)            # toggled off
+ROW_HOVER = (54, 66, 110, 215)         # cursor over a row
+ROW_LOCKED = (16, 20, 36, 170)         # a level not yet unlocked
+LIST_WELL = (14, 18, 34, 230)          # the recessed track a list sits in
+SCROLLBAR = (104, 120, 168, 225)       # muted, not white
+TRACK = (13, 16, 31, 215)              # empty part of a progress bar
+SLIDER_FILL = (86, 106, 168, 235)      # filled part of a volume slider
 SKIN_TEXT = TEXT
 SKIN_SHADOW = (0, 0, 0, 120)
 
@@ -860,7 +907,8 @@ CREDITS_TEXT = (
     ("s", ""), ("s", ""),
 
     ("h", "CREATED BY"), ("r", ""),
-    ("b", "TY FUKUSHIMA"),
+    ("b", "TYBO"),
+    ("b", "(TY FUKUSHIMA)"),
     ("s", ""), ("s", ""),
 
     ("h", "GAME DESIGN"), ("r", ""),
@@ -873,8 +921,10 @@ CREDITS_TEXT = (
     ("h", "PROGRAMMING"), ("r", ""),
     ("", "LEAD PROGRAMMER"), ("b", "TY FUKUSHIMA"),
     ("", "ENGINE / FRAMEWORK"), ("b", "PYTHON, PYGAME"),
+    ("", "ADDITIONAL LIBRARY"), ("b", "NUMPY"),
     ("", "PROGRAMMING ASSISTANCE"),
-    ("b", "CLAUDE CODE"), ("b", "CHATGPT CODEX"),
+    ("b", "CLAUDE CODE"),
+    ("b", "CHATGPT CODEX"),
     ("s", ""), ("s", ""),
 
     ("h", "ART AND DESIGN"), ("r", ""),
@@ -882,6 +932,7 @@ CREDITS_TEXT = (
     ("", "UI / INTERFACE DESIGN"), ("b", "TY FUKUSHIMA"),
     ("", "VISUAL DESIGN"), ("b", "TY FUKUSHIMA"),
     ("", "PIXEL ART EDITING"), ("b", "TY FUKUSHIMA"),
+    ("", "UI ELEMENTS"), ("b", "TY FUKUSHIMA"),
     ("s", ""), ("s", ""),
 
     ("h", "AUDIO DIRECTION"), ("r", ""),
@@ -889,76 +940,106 @@ CREDITS_TEXT = (
     ("", "MUSIC AND SOUND INTEGRATION"), ("b", "TY FUKUSHIMA"),
     ("s", ""), ("s", ""),
 
-    ("h", "EFFECTS"), ("r", ""),
-    ("b", "TY FUKUSHIMA"),
+    ("h", "GEM ASSETS"), ("r", ""),
+    ("", "COLORED GEMS"), ("b", "B2719680"),
+    ("", "RAINBOW, ROCK AND BOMB GEMS"), ("b", "TY FUKUSHIMA"),
     ("s", ""), ("s", ""),
 
-    ("h", "ART ASSETS"), ("r", ""),
-    ("", "GEM ASSETS"),
-    ("b", "COLORED GEMS"), ("b", "BY B2719680"),
-    ("s", ""),
-    ("", "ADDITIONAL ARTWORK"),
-    ("b", "RAINBOW, ROCK AND BOMB GEMS"),
-    ("b", "CREATED IN ADOBE PHOTOSHOP"),
-    ("s", ""),
-    ("", "PIXEL ART BACKGROUNDS"),
-    ("b", "PIXEL ART BACKGROUNDS 10"),
-    ("b", "SKY CLOUD - BY ARLUDUS"),
-    ("s", ""),
-    ("b", "PIXEL ART BACKGROUNDS"), ("b", "BY FLORESWA"),
-    ("s", ""),
-    ("b", "VARIOUS BACKGROUNDS"), ("b", "BY STEALTHIX"),
-    ("s", ""),
-    ("b", "SWAMP PIXEL GAME BACKGROUNDS"),
-    ("b", "BY FREE GAME ASSETS"),
+    ("h", "BACKGROUND ASSETS"), ("r", ""),
+    ("", "PIXEL ART BACKGROUNDS"), ("b", "FLORESWA"),
+    ("", "62 STATIC PIXEL ART BACKGROUNDS"), ("b", "CHEESEPIXEL"),
+    ("", "UNDERWATER WORLD BACKGROUNDS"), ("b", "FREE GAME ASSETS"),
+    ("", "ANIMATED PIXEL-ART BACKGROUNDS"), ("b", "FEONY LABS"),
+    ("", "TRIANO VILLAGE MEDIEVAL TOWN"), ("b", "PIXEL_1992"),
+    ("", "OCEAN AND CLOUDS BACKGROUNDS"), ("b", "FREE GAME ASSETS"),
+    ("", "PARALLAX AND LINEAR BACKGROUNDS"), ("b", "ARNAV SAIKIA"),
+    ("", "PIXEL ART SKY BACKGROUNDS"), ("b", "POLAR_34"),
+    ("", "CRYSTAL CAVE BACKGROUNDS"), ("b", "FREE GAME ASSETS 4"),
+    ("", "SEAMLESS NATURE BACKGROUNDS"), ("b", "FREE GAME ASSETS"),
+    ("", "VARIOUS BACKGROUNDS"), ("b", "STEALTHIX"),
+    ("", "SWAMP PIXEL GAME BACKGROUNDS"), ("b", "FREE GAME ASSETS"),
+    ("", "SKY CLOUD"), ("b", "ARLUDUS"),
+    ("", "PIXEL ART BACKGROUNDS 10"), ("b", "FREE GAME ASSETS"),
     ("s", ""),
     ("", "OTHER BACKGROUND SOURCES"),
-    ("b", "VECTEEZY"), ("b", "PIXABAY"),
-    ("b", "FREEPIK"), ("b", "ADOBE STOCK"),
-    ("s", ""),
-    ("", "COMMUNITY INSPIRATION"),
-    ("b", "R/KINGDOMHEARTS"), ("b", "R/PIXELART"),
+    ("b", "PIXABAY"),
+    ("b", "VECTEEZY"),
+    ("b", "FREEPIK"),
+    ("b", "ADOBE STOCK"),
+    ("s", ""), ("s", ""),
+
+    ("h", "VISUAL EFFECTS"), ("r", ""),
+    ("", "GO! AND LEVEL UP! EFFECTS"), ("b", "TY FUKUSHIMA"),
+    ("", "SMOKE EFFECT"), ("b", "ADOBE STOCK"),
+    ("s", ""), ("s", ""),
+
+    ("h", "FONT"), ("r", ""),
+    ("b", "SNOWBELL"),
     ("s", ""), ("s", ""),
 
     ("h", "SOUND EFFECTS"), ("r", ""),
-    ("b", "UNIVERSAL UI/MENU SOUNDPACK"),
-    ("b", "BY CYREX STUDIOS"),
-    ("s", ""),
-    ("b", "TRIPLE TREAT"),
-    ("b", "SOUND EFFECTS FOR MATCH-3 GAMES"),
-    ("b", "BY SABLE BLOOM"),
-    ("s", ""),
-    ("", "INSPIRED BY"),
-    ("b", "BEJEWELED (2001)"),
-    ("b", "BEJEWELED 2 DELUXE (2004)"),
-    ("b", "BY POPCAP GAMES"),
+    ("", "UNIVERSAL UI / MENU SOUNDPACK"), ("b", "CYREX STUDIOS"),
+    ("", "TRIPLE TREAT"),
+    ("", "SOUND EFFECTS FOR MATCH-3 GAMES"), ("b", "SABLE BLOOM"),
     ("s", ""), ("s", ""),
 
     ("h", "MUSIC AND AUDIO"), ("r", ""),
-    ("", "PIXABAY FREE USE MUSIC"),
-    ("b", "PRIVATE CHAN"), ("b", "DJARTMUSIC"),
-    ("b", "NOCOPYRIGHTSOUNDS633"), ("b", "MOODMODE"),
-    ("b", "RETRO-BGM-CHAN"), ("b", "NIKNET_ART"),
+    ("", "PIXABAY MUSIC CREATORS"),
+    ("b", "PRIVATE CHAN"),
+    ("b", "DJARTMUSIC"),
+    ("b", "NOCOPYRIGHTSOUNDS633"),
+    ("b", "MOODMODE"),
+    ("b", "RETRO-BGM-CHAN"),
+    ("b", "NIKNET_ART"),
     ("s", ""),
-    ("", "YOUTUBE"), ("b", "8-BIT UNIVERSE"),
+    ("", "PIXABAY TRACKS"),
+    ("b", "ARCADE BEAT"),
+    ("b", "RETRO 8BIT HAPPY VIDEOGAME MUSIC"),
+    ("b", "PIXELATED DREAMS"),
+    ("b", "DATA ANALYSIS"),
+    ("b", "INCIDENT"),
+    ("b", "INCONVENIENT TRUTH"),
+    ("b", "FACTORY AT NIGHT"),
+    ("b", "SERIOUS MOOD"),
+    ("b", "RUINED FACTORY"),
+    ("b", "PROBLEM"),
+    ("b", "HOME TOWN"),
+    ("b", "GOOD MORNING"),
+    ("b", "NEW GAME"),
+    ("b", "A VIDEO GAME"),
+    ("b", "LEVEL VII SHORT"),
+    ("b", "LEVEL III"),
+    ("b", "8 BIT GAME"),
+    ("b", "8 BIT AIR FIGHT"),
+    ("b", "PIXEL PARADISE"),
+    ("b", "THAT GAME ARCADE"),
+    ("s", ""), ("s", ""),
+
+    ("h", "INSPIRED BY"), ("r", ""),
+    ("b", "BEJEWELED (2001)"),
+    ("b", "BEJEWELED 2 DELUXE (2004)"),
     ("s", ""),
-    ("", "FEATURED SONGS"),
-    ("b", "SIMPLE AND CLEAN"), ("b", "HIKARU UTADA"),
+    ("", "ORIGINAL GAMES CREATED BY"),
+    ("b", "POPCAP GAMES"),
+    ("s", ""), ("s", ""),
+
+    ("h", "COMMUNITY INSPIRATION"), ("r", ""),
+    ("b", "R/KINGDOMHEARTS"),
+    ("b", "R/PIXELART"),
+    ("s", ""), ("s", ""),
+
+    ("h", "TECHNOLOGY"), ("r", ""),
+    ("b", "PYTHON"),
+    ("b", "PYGAME"),
+    ("b", "NUMPY"),
     ("s", ""),
-    ("b", "ROXAS"), ("b", "YOKO SHIMOMURA"),
-    ("s", ""),
-    ("b", "BLUE (DA BA DEE)"), ("b", "EIFFEL 65"),
-    ("s", ""),
-    ("b", "GET LUCKY"), ("b", "DAFT PUNK"),
-    ("s", ""),
-    ("b", "LAST FRIDAY NIGHT"), ("b", "KATY PERRY"),
-    ("s", ""),
-    ("b", "SMELLS LIKE TEEN SPIRIT"), ("b", "NIRVANA"),
+    ("", "TOOLS"),
+    ("b", "ADOBE PHOTOSHOP"),
     ("s", ""), ("s", ""),
 
     ("h", "SPECIAL THANKS"), ("r", ""),
     ("b", "THE CREATORS WHO SHARE ASSETS"),
-    ("b", "WITH THE GAME DEV COMMUNITY"),
+    ("b", "WITH THE GAME DEVELOPMENT COMMUNITY"),
     ("s", ""),
     ("b", "EVERYONE WHO PLAYTESTED PRISMAC"),
     ("s", ""), ("s", ""),
@@ -969,16 +1050,23 @@ CREDITS_TEXT = (
     ("s", ""),
     ("b", "NOT AFFILIATED WITH, ENDORSED BY OR"),
     ("b", "SPONSORED BY POPCAP GAMES,"),
-    ("b", "ELECTRONIC ARTS, DISNEY, SQUARE ENIX"),
-    ("b", "OR ANY OTHER REFERENCED CREATOR."),
+    ("b", "ELECTRONIC ARTS, OR ANY OTHER"),
+    ("b", "REFERENCED CREATORS OR COMPANIES."),
     ("s", ""),
-    ("b", "ALL TRADEMARKS AND COPYRIGHTED WORKS"),
-    ("b", "BELONG TO THEIR RESPECTIVE OWNERS."),
+    ("b", "ALL TRADEMARKS, COPYRIGHTED MATERIALS"),
+    ("b", "AND ORIGINAL WORKS BELONG TO"),
+    ("b", "THEIR RESPECTIVE OWNERS."),
+    ("s", ""),
     ("b", "THIRD-PARTY ASSETS ARE CREDITED"),
     ("b", "TO THEIR ORIGINAL CREATORS."),
     ("s", ""), ("s", ""),
 
-    ("t", "THANK YOU FOR PLAYING"),
+    ("t", "THANK YOU FOR PLAYING!"),
+    ("s", ""), ("s", ""),
+
+    ("t", "PRISMAC"),
+    ("s", ""),
+    ("", "CREATED BY"), ("b", "TY FUKUSHIMA"),
     ("s", ""),
     ("", "(C) 2026 TY FUKUSHIMA"),
     ("s", ""), ("s", ""), ("s", ""),
@@ -998,7 +1086,7 @@ FONT_DIR = asset_folder("fonts")
 UI_IMAGES = ("board", "score", "buttoninfotile", "menubutton",
              "menubuttonhovered", "title")
 
-CREDITS = "Created by Ty Fukushima and Claude Code"
+CREDITS = "Created by Tybo"
 
 AUDIO_EXTS = (".ogg", ".wav", ".mp3", ".flac")
 
@@ -1104,8 +1192,8 @@ RESERVED_GEMS = (HYPERCUBE_ASSET, BOMB_ASSET, ROCK_ASSET)
 # runs. With real artwork present, none of this is touched.
 GEM_SHAPES = ("circle", "square", "triangle", "diamond",
               "hexagon", "star", "octagon", "pentagon")
-GEM_COLORS = ((232,  72,  85), ( 86, 194, 112), ( 72, 142, 236), (246, 190,  62),
-              (172, 112, 232), ( 56, 208, 212), (244, 124,  60), (150, 206,  80))
+GEM_COLORS = ((255, 215, 0),   (255, 215, 0),   (255, 215, 0),   (255, 215, 0),
+              (255, 215, 0),   (255, 215, 0),   (255, 215, 0),   (255, 215, 0))
 
 # Filled in by discover_gems() at startup; these are just a working default so
 # the module can be imported and tested without any image files present.
@@ -2585,7 +2673,7 @@ def engraved(font, text, color=SKIN_TEXT):
     out = pygame.Surface((body.get_width() + drop, body.get_height() + drop),
                          pygame.SRCALPHA)
     shadow = font.render(text, True, (0, 0, 0))
-    shadow.set_alpha(150)
+    shadow.set_alpha(180)
     out.blit(shadow, (drop, drop))
     out.blit(body, (0, 0))
     return out
@@ -2689,7 +2777,19 @@ def campaign_area_dir(area):
         return None
     if area == SPACE_PART2_AREA:
         return _subfolder(campaign_area_dir(SPACE_AREA), SPACE_PART2_SUBDIR)
-    return _subfolder(CAMPAIGN_DIR, _norm(CAMPAIGN_AREAS[area]))
+    want = _norm(CAMPAIGN_AREAS[area])
+    found = _subfolder(CAMPAIGN_DIR, want)
+    if found is not None:
+        return found
+    # Renaming an area in CAMPAIGN_AREAS should not silently orphan the folder
+    # that already holds its artwork, so a singular/plural mismatch is
+    # tolerated: "Mountain" still finds a campaign/Mountains/ folder.
+    for alt in (want + "s", want[:-1] if want.endswith("s") else None):
+        if alt:
+            found = _subfolder(CAMPAIGN_DIR, alt)
+            if found is not None:
+                return found
+    return None
 
 
 def campaign_music_dir(area):
@@ -3487,6 +3587,23 @@ class Audio:
         self.apply_volume()
         return self.muted
 
+    def silence(self):
+        """Hard stop: music and every playing effect, with nothing queued.
+
+        Muting on its own is not enough - a sound already in flight keeps
+        playing at zero volume and MUSIC_END still fires, which would start
+        the next track.
+        """
+        self.muted = True
+        if not self.ok:
+            return
+        try:
+            pygame.mixer.music.stop()
+            pygame.mixer.music.set_endevent()   # no MUSIC_END, no next track
+            pygame.mixer.stop()                 # every channel
+        except pygame.error:
+            pass
+
     def report(self):
         if not self.ok:
             return
@@ -3551,15 +3668,12 @@ class Puff:
         travel = 1.0 - (1.0 - p) ** 2.4
         rise = p * p * 26                       # smoke keeps lifting as it fades
         scale = self.scale0 + (self.scale1 - self.scale0) * ease_out(p)
-        image = pygame.transform.rotozoom(self.image, self.spin * travel, scale)
-        if self.tint < 255:
-            shade = image.copy()
-            shade.fill((self.tint, self.tint, self.tint, 255),
-                       special_flags=pygame.BLEND_RGBA_MULT)
-            image = shade
         # fade in briefly so it does not appear at full strength
         alpha = 235 * min(1.0, p * 6.0) * (1.0 - p) ** 1.7
-        image.set_alpha(int(alpha))
+        image = spin_fade(self.image, self.spin * travel, scale, int(alpha))
+        if self.tint < 255:
+            image.fill((self.tint, self.tint, self.tint, 255),
+                       special_flags=pygame.BLEND_RGBA_MULT)
         screen.blit(image, image.get_rect(center=(
             int(self.x + self.dx * travel),
             int(self.y + self.dy * travel - rise))))
@@ -3637,7 +3751,7 @@ class TimePop:
 class FlyingGem:
     """One gem hurled off the board when a level ends."""
 
-    __slots__ = ("image", "x", "y", "dx", "dy", "spin", "delay", "t")
+    __slots__ = ("image", "x", "y", "dx", "dy", "spin", "delay", "t", "flat")
 
     @staticmethod
     def crop(sprite):
@@ -3659,9 +3773,18 @@ class FlyingGem:
         box = box.inflate(2, 2).clip(sprite.get_rect())
         return sprite.subsurface(box).copy() if box.width and box.height else sprite
 
-    def __init__(self, image, x, y, delay, origin=None, force=1.0):
+    def __init__(self, image, x, y, delay, origin=None, force=1.0, flat=False):
         self.image = self.crop(image)
         self.x, self.y = x, y
+        self.flat = flat
+        if flat:
+            # Smooth animation off: the gem stays put and fades. The board
+            # used to be emptied with nothing drawn in its place, so every
+            # gem vanished between one frame and the next.
+            self.dx = self.dy = self.spin = 0.0
+            self.delay = delay
+            self.t = 0.0
+            return
         # Thrown outward from a centre: the middle of the board for a level
         # transition, or the blast itself for an explosion.
         cx, cy = origin or (BOARD_X + BOARD_W / 2, BOARD_Y + BOARD_H / 2)
@@ -3689,11 +3812,10 @@ class FlyingGem:
                 self.image, (max(1, int(TILE * scale)),) * 2)
             surface.blit(art, (int(x), int(y)))
             return
-        image = pygame.transform.rotozoom(self.image, self.spin * p, scale)
         fade = max(0, int(255 * (1.0 - clamp01(p / 0.75))))
-        image.set_alpha(fade)
-        cx, cy = place(self.x + self.dx * p,
-                       self.y + self.dy * p + 900 * p * p)
+        image = spin_fade(self.image, self.spin * p, scale, fade)
+        drop = 0.0 if self.flat else 900 * p * p     # no gravity in flat mode
+        cx, cy = place(self.x + self.dx * p, self.y + self.dy * p + drop)
         surface.blit(image, image.get_rect(center=(int(cx), int(cy))))
 
     def draw(self, screen):
@@ -3702,12 +3824,43 @@ class FlyingGem:
             screen.blit(self.image, self.image.get_rect(
                 center=(int(self.x), int(self.y))))
             return
-        image = pygame.transform.rotozoom(self.image, self.spin * p, 1.0)
         fade = max(0, int(255 * (1.0 - clamp01(p / 0.75))))
-        image.set_alpha(fade)
+        image = spin_fade(self.image, self.spin * p, 1.0, fade)
+        drop = 0.0 if self.flat else 900 * p * p     # no gravity in flat mode
         screen.blit(image, image.get_rect(center=(
             int(self.x + self.dx * p),
-            int(self.y + self.dy * p + 900 * p * p))))   # gravity
+            int(self.y + self.dy * p + drop))))
+
+
+def spin_fade(image, angle, scale, fade):
+    """Rotate, scale and fade a sprite, keeping its transparency.
+
+    Two traps here, both of which showed up as a black square around every
+    flying gem on macOS:
+
+    rotozoom fills the corners it exposes with BLACK unless the source has
+    per-pixel alpha. A sprite that went through convert() rather than
+    convert_alpha() - which is what happens to any artwork the loader thinks
+    is opaque - has none, so the corners come back solid.
+
+    set_alpha() then makes that black box semi-transparent instead of
+    invisible, which is what made it visible against the backdrop rather
+    than merely wrong.
+
+    So: force a per-pixel-alpha copy BEFORE rotating, and apply the fade by
+    multiplying the alpha channel, the same way the title art is dimmed.
+    """
+    if not image.get_flags() & pygame.SRCALPHA:
+        source = pygame.Surface(image.get_size(), pygame.SRCALPHA)
+        source.blit(image, (0, 0))
+        image = source
+    out = pygame.transform.rotozoom(image, angle, scale)
+    fade = max(0, min(255, int(fade)))
+    if fade < 255:
+        # BLEND_RGBA_MULT scales the existing alpha instead of replacing it,
+        # so already-transparent pixels stay transparent.
+        out.fill((255, 255, 255, fade), special_flags=pygame.BLEND_RGBA_MULT)
+    return out
 
 
 class ScrollList:
@@ -3741,7 +3894,10 @@ class ScrollList:
         return row if 0 <= row < len(self.items) else -1
 
     def draw(self, screen, font):
-        screen.blit(translucent(self.rect.size, (255, 255, 255, 16), None, S(8)),
+        # Navy, not a white wash. translucent() forces alpha to 255 under
+        # "reduce transparency", so (255,255,255,30) became a solid WHITE
+        # slab - which is what made the music and background pickers glare.
+        screen.blit(translucent(self.rect.size, LIST_WELL, None, S(8)),
                     self.rect.topleft)
         clip = screen.get_clip()
         screen.set_clip(self.rect)
@@ -3750,11 +3906,11 @@ class ScrollList:
             y = self.rect.y + (i - top) * self.ROW
             if i == self.current:
                 screen.blit(translucent((self.rect.width, self.ROW - S(2)),
-                                        GOLD + (70,), None, S(6)),
+                                        ROW_ON, None, S(6)),
                             (self.rect.x, y))
             elif i == self.hover:
                 screen.blit(translucent((self.rect.width, self.ROW - S(2)),
-                                        (255, 255, 255, 34), None, S(6)),
+                                        ROW_HOVER, None, S(6)),
                             (self.rect.x, y))
             colour = GOLD if i == self.current else TEXT
             label = Button.fit(font, self.items[i], self.rect.width - S(20))
@@ -3767,7 +3923,7 @@ class ScrollList:
         if self.max_offset() > 0:
             span = self.rect.height * self.visible / len(self.items)
             pos = (self.rect.height - span) * self.offset / self.max_offset()
-            screen.blit(translucent((S(4), int(span)), (255, 255, 255, 110), None, S(2)),
+            screen.blit(translucent((S(4), int(span)), SCROLLBAR, None, S(2)),
                         (self.rect.right - S(6), self.rect.y + int(pos)))
 
 
@@ -3845,13 +4001,15 @@ class Slider:
         screen.blit(pct, (self.rect.right - pct.get_width(),
                           self.rect.y - pct.get_height() - S(8)))
 
-        screen.blit(translucent(self.rect.size, (255, 255, 255, 38), None,
+        # TRACK, not a white wash: under "reduce transparency" translucent()
+        # forces alpha to 255 and a white wash turns into a solid white bar.
+        screen.blit(translucent(self.rect.size, TRACK, None,
                                 self.rect.height // 2), self.rect.topleft)
         if value > 0:
             width = int(self.rect.width * value)
             if width >= self.rect.height:
                 screen.blit(translucent((width, self.rect.height),
-                                        (206, 210, 218, 235), None,
+                                        SLIDER_FILL, None,
                                         self.rect.height // 2),
                             self.rect.topleft)
         knob = self.rect.x + int(self.rect.width * value)
@@ -3872,8 +4030,13 @@ class Game:
         self._blocks = {}
         self.blank_tile = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
         self.chaos_art = load_chaos_assets()
-        self.mono_normal = [self.greyscale(spr) for spr in self.normal]
-        self.mono_flame = [self.greyscale(spr) for spr in self.flame]
+        self._desat = {}
+        # One distinct grey per kind rather than one grey for all of them, so
+        # MONO stays legible enough to actually play. See mono_shade().
+        self.mono_normal = [self.mono_shade(spr, i, len(self.normal))
+                            for i, spr in enumerate(self.normal)]
+        self.mono_flame = [self.mono_shade(spr, i, len(self.flame))
+                           for i, spr in enumerate(self.flame)]
         self.flame_halo = [bake_halo(spr, (255, 150, 46)) for spr in self.flame]
         self.flame_glint = [bake_glints(spr) for spr in self.flame]
         self.banner = self.build_banner()
@@ -3907,6 +4070,10 @@ class Game:
         # disabled HINT button on the final level.
         self.secret_open = False
         self.secret_glitch = False
+        # The secret level's ending. Set once and never cleared - deliberately
+        # NOT in reset(), so nothing can put the game back together.
+        self.doom = False
+        self.doom_t = 0.0
         self.dead_hint_taps = 0
         self.stars = set()             # achievement keys already earned
         self.star_banner = None        # the star being announced, if any
@@ -3927,6 +4094,11 @@ class Game:
         # forced on someone the first time they launch the game
         self.settings = {k: k not in ("fullscreen", "opaque")
                          for k, _, _ in SETTING_DEFS}
+        if MAC_WINDOWED_ONLY:
+            for key in MAC_UNSUPPORTED:
+                self.settings[key] = False
+            for key in MAC_FORCED_ON:
+                self.settings[key] = True
         if not BACKDROPS_OK:
             self.settings["backgrounds"] = False
         self.settings_open = False
@@ -3998,7 +4170,7 @@ class Game:
         for radius in (12, 7, 3):
             blur = pygame.transform.smoothscale(
                 shade, (art.get_width() + radius * 2, art.get_height() + radius * 2))
-            blur.set_alpha(64)
+            blur.set_alpha(100)
             out.blit(blur, (pad - radius, pad - radius))
         out.blit(art, (pad, pad))
         return out
@@ -4573,6 +4745,11 @@ class Game:
         OPAQUE_UI = bool(self.settings.get("opaque", False))
         self.panel_bg = translucent((PANEL_W, PANEL_H), PANEL_FILL,
                                     PANEL_EDGE, 18)
+        # menu_bg was baked at startup and only ever rebuilt on a render-scale
+        # change, so toggling "reduce transparency" left the menu panel glassy
+        # while every other surface went solid.
+        self.menu_bg = translucent(self.menu_rect().size, PANEL_FILL,
+                                   PANEL_EDGE, 16)
         self.board_bg = self.build_board_backdrop()
         self.build_widgets()
         self.build_title_widgets()
@@ -4595,6 +4772,13 @@ class Game:
             if isinstance(rs, (int, float)) and any(
                     abs(rs - f) < 0.01 for f, _ in SCALE_OPTIONS):
                 self.settings["render_scale"] = float(rs)
+        if MAC_WINDOWED_ONLY:
+            # A save written on another machine, or before this build, could
+            # switch these back on.
+            for key in MAC_UNSUPPORTED:
+                self.settings[key] = False
+            for key in MAC_FORCED_ON:
+                self.settings[key] = True
         self.apply_opacity()
         if isinstance(data.get("music"), (int, float)):
             self.audio.set_music_volume(float(data["music"]))
@@ -4607,7 +4791,12 @@ class Game:
 
         Off keeps every animation the same LENGTH - it just removes the
         overshoot, bounce and wobble, so motion is flat and businesslike.
+
+        Always off on macOS: that path draws one opaque frame with no
+        compositing, and the springy flourishes lean on translucent overlays.
         """
+        if MAC_WINDOWED_ONLY:
+            return False
         return self.settings.get("smooth", True)
 
     def ease_land(self, t):
@@ -4626,6 +4815,10 @@ class Game:
         window that cannot be that big.
         """
         if self.display is None:
+            return None
+        if MAC_WINDOWED_ONLY:
+            # Windowed only here - see MAC_WINDOWED_ONLY. Nothing to switch.
+            self.settings["fullscreen"] = False
             return None
         # Order matters. Windowed mode opens a real WIDTH x HEIGHT window, so
         # the scale has to come down BEFORE the window is created - resetting
@@ -4648,6 +4841,9 @@ class Game:
         return self.apply_fullscreen(not self.display.fullscreen)
 
     def toggle_setting(self, key):
+        if MAC_WINDOWED_ONLY and key in MAC_UNSUPPORTED + MAC_FORCED_ON:
+            self.audio.play("menuclick")
+            return
         if key == "fullscreen" and self.display is not None:
             self.toggle_fullscreen()
             self.audio.play("menuclick")
@@ -5123,11 +5319,11 @@ class Game:
             locked = number > self.campaign_unlocked
             beaten = number <= self.campaign_cleared
             if locked:
-                fill = (255, 255, 255, 12)
+                fill = ROW_LOCKED
             elif beaten:
-                fill = (126, 216, 150, 46)
+                fill = ROW_DONE
             else:
-                fill = GOLD + (60,)
+                fill = ROW_ON
             screen.blit(translucent(rect.size, fill, None, S(8)), rect.topleft)
 
             label = self.font.render(
@@ -5172,7 +5368,7 @@ class Game:
         for key, rect, label, blurb in self.extra_rows:
             on = self.extras.get(key, False)
             screen.blit(translucent(rect.size,
-                                    GOLD + (60,) if on else (255, 255, 255, 18),
+                                    ROW_ON if on else ROW_OFF,
                                     None, S(8)), rect.topleft)
             tick = pygame.Rect(rect.x + S(8), rect.centery - S(10), S(20), S(20))
             pygame.draw.rect(screen, TEXT if on else DIM, tick, max(1, S(2)),
@@ -5429,7 +5625,7 @@ class Game:
             blur = pygame.transform.smoothscale(
                 shadow, (art.get_width() + radius * 2,
                          art.get_height() + radius * 2))
-            blur.set_alpha(70)
+            blur.set_alpha(110)
             out.blit(blur, (pad - radius, pad - radius))
         out.blit(art, (pad, pad))
         return out
@@ -5589,6 +5785,10 @@ class Game:
 
     def shake_offset(self):
         """INSANE explosive camera shake - rapid violent jitter."""
+        if MAC_WINDOWED_ONLY:
+            # Not supported here: shaking the UI needs a separate scratch
+            # surface blitted with alpha, which this build renders black.
+            return (0, 0)
         if self.shake <= 0.15:
             return (0, 0)
         a = self.shake
@@ -5822,13 +6022,12 @@ class Game:
                 # stagger by distance from the centre so it ripples outward
                 dr, dc = r - (ROWS - 1) / 2, c - (COLS - 1) / 2
                 delay = math.hypot(dr, dc) / max(ROWS, COLS) * 0.42
-                if not self.bubbly:
-                    continue          # flat mode fades the board out instead
                 self.flyers.append(FlyingGem(
                     self.sprite_for(gem),
                     BOARD_X + (c + 0.5) * TILE,
                     BOARD_Y + (r + 0.5) * TILE,
-                    delay + random.uniform(0.0, 0.06)))
+                    delay + random.uniform(0.0, 0.06),
+                    flat=not self.bubbly))
 
         # Empty the board immediately. Otherwise draw_scene keeps drawing the
         # gems in place while their copies fly away, so the board looks full
@@ -5948,8 +6147,15 @@ class Game:
                    lambda: self.audio.sfx_volume, self.audio.set_sfx_volume),
         ]
         # graphics toggles sit between the sliders and the buttons
+        # These three lean on the compositing the macOS path deliberately does
+        # not do, so they are shown as unavailable rather than silently doing
+        # nothing when clicked.
         self.setting_rows = []
         for i, (key, label, blurb) in enumerate(SETTING_DEFS):
+            if MAC_WINDOWED_ONLY and key in MAC_UNSUPPORTED:
+                blurb = "Not Supported By MacOS"
+            elif MAC_WINDOWED_ONLY and key in MAC_FORCED_ON:
+                blurb = "Always On For MacOS"
             self.setting_rows.append(
                 (key, pygame.Rect(sx, box.y + S(226) + i * EXTRA_ROW,
                                   sw, EXTRA_ROW - S(6)), label, blurb))
@@ -6136,10 +6342,8 @@ class Game:
     # -- button actions ---------------------------------------------------
 
     def show_hint(self):
-        # No hints in secret mode - it's corrupted!
+        # No hints in secret mode - it's corrupted! But still playable.
         if self.secret_glitch:
-            if not self.on_title:
-                self.quit()
             return
         # No hints in Space area - it's brutal!
         if self.in_space():
@@ -6572,10 +6776,8 @@ class Game:
     def open_menu(self):
         # The picker is a whole screen, not a panel, so the menu takes over
         # from it rather than sitting on top.
-        # Prevent opening menu in secret mode
+        # Menu is blocked in secret mode but doesn't quit the game
         if self.secret_glitch:
-            if not self.on_title:
-                self.quit()
             return
         if self.campaign_open:
             self.close_campaign()
@@ -6664,6 +6866,58 @@ class Game:
     def quit(self):
         self.save_run()
         self.wants_quit = True
+
+    # -- the secret level's ending -----------------------------------------
+
+    def begin_doom(self):
+        """Everything stops. No board, no panel, no sound - just the message.
+
+        Deliberately does NOT save: the run this ends is not one to come back
+        to, and writing the save here would restore straight into it.
+        """
+        self.doom = True
+        self.doom_t = 0.0
+        # every dialog, popup and overlay is dismissed, so nothing can draw
+        # itself over the black or survive into the next frame
+        self.menu_open = False
+        self.music_open = False
+        self.bg_picker_open = False
+        self.extras_open = False
+        self.resume_open = False
+        self.credits_open = False
+        self.wipe_open = False
+        self.campaign_open = False
+        self.star_banner = None
+        self.over = False
+        self.effects = []
+        self.flyers = []
+        self.debris = []
+        self.score_pops = []
+        self.note = ""
+        self.sel = None
+        self.dragging = None
+        self.hint = None
+        try:
+            self.audio.silence()
+        except Exception:
+            pass
+
+    def update_doom(self, dt):
+        """Count down to the crash. Nothing else in the game runs."""
+        self.doom_t += dt
+        if self.doom_t >= SECRET_DOOM_SECONDS:
+            # Not a clean shutdown. pygame is never torn down and no save is
+            # written; the process simply stops existing.
+            os._exit(1)
+
+    def draw_doom(self, screen):
+        screen.fill((0, 0, 0))
+        image = self.font_huge.render(SECRET_DOOM_TEXT, True, (190, 0, 0))
+        if image.get_width() > WIDTH - S(40):
+            scale = (WIDTH - S(40)) / image.get_width()
+            image = pygame.transform.smoothscale(
+                image, (WIDTH - S(40), max(1, int(image.get_height() * scale))))
+        screen.blit(image, image.get_rect(center=(WIDTH // 2, HEIGHT // 2)))
 
     # -- input ------------------------------------------------------------
 
@@ -7078,6 +7332,10 @@ class Game:
         self.grid[r1][c1], self.grid[r2][c2] = self.grid[r2][c2], self.grid[r1][c1]
 
     def update(self, dt):
+        if self.doom:
+            # Nothing else ticks: no board, no timer, no animations.
+            self.update_doom(dt)
+            return
         self.time += dt
         self.ease_readouts(dt)
         self.ease_background(dt)
@@ -7455,6 +7713,9 @@ class Game:
             gained = int(round(gained * campaign_score_multiplier(
                 campaign_area_of(self.campaign_level_num))))
         self.score += gained
+        if (self.secret_glitch and not self.doom
+                and self.score >= SECRET_DOOM_SCORE):
+            self.begin_doom()
         if self.extra("lock"):
             # Under COLOR LOCK only the paying colour counts towards a
             # "clear N gems" objective. Counting every cleared cell made the
@@ -7657,6 +7918,72 @@ class Game:
     # -- drawing ----------------------------------------------------------
 
     @staticmethod
+    def mono_shade(sprite, kind, count=None):
+        """Greyscale, then normalised to a brightness unique to this gem kind.
+
+        Flat greyscale made every gem identical, so MONO was less "hard" than
+        it was guesswork - you could not tell a legal match from an illegal
+        one. Spreading the kinds across distinct lightness steps keeps the
+        colour information technically readable while still being far harder
+        than hue: the eye is much worse at ranking greys than at telling red
+        from green, and adjacent steps are close enough to demand a real look.
+
+        The step is a TARGET mean brightness, not a multiplier. Multiplying
+        carried each sprite's own base luminance through, so a dark red and a
+        bright yellow landed unevenly and the order did not even follow the
+        gem kinds - two of them collided outright. Measuring first and scaling
+        to hit the target spaces them evenly whatever the artwork looks like.
+
+        Only the RGB channels are touched, so transparency, internal shading
+        and the outline all survive.
+        """
+        count = max(1, count if count is not None else N_TYPES)
+        grey = Game.greyscale(sprite).copy()
+        if not grey.get_flags() & pygame.SRCALPHA:
+            fixed = pygame.Surface(grey.get_size(), pygame.SRCALPHA)
+            fixed.blit(grey, (0, 0))
+            grey = fixed
+
+        # Mean brightness of the visible pixels only - counting transparent
+        # ones would drag every gem towards black by however much padding the
+        # sprite happens to have.
+        total = seen = 0
+        width, height = grey.get_size()
+        grey.lock()
+        for y in range(0, height, 2):
+            for x in range(0, width, 2):
+                r, g, b, a = grey.get_at((x, y))
+                if a > 128:
+                    total += r
+                    seen += 1
+        grey.unlock()
+        if not seen:
+            return grey
+        current = max(1.0, total / seen)
+
+        # 62..196 out of 255. Tighter than the full range on purpose: below
+        # ~60 the outline swallows the face and two dark gems stop being
+        # separable, and above ~200 the highlights clip to white and do the
+        # same at the bright end.
+        lo, hi = 62.0, 196.0
+        target = lo if count == 1 else lo + (hi - lo) * (kind / (count - 1))
+        if target <= current:
+            # Darkening: scale the channels, which keeps the internal shading
+            # proportional.
+            level = min(255, max(0, int(round(255 * target / current))))
+            grey.fill((level, level, level, 255),
+                      special_flags=pygame.BLEND_RGB_MULT)
+        else:
+            # Brightening needs ADD. BLEND_RGB_MULT can only ever darken, so
+            # a gem whose target was above its own luminance came back
+            # completely unchanged - which is how two kinds ended up 7 points
+            # apart and effectively identical.
+            lift = min(255, max(0, int(round(target - current))))
+            grey.fill((lift, lift, lift, 255),
+                      special_flags=pygame.BLEND_RGB_ADD)
+        return grey
+
+    @staticmethod
     def greyscale(sprite):
         """Desaturate a sprite without needing numpy.
 
@@ -7679,6 +8006,29 @@ class Game:
                     lum = int(r * 0.30 + g * 0.59 + b * 0.11)
                     out.set_at((x, y), (lum, lum, lum, a))
         out.unlock()
+        return out
+
+    def desaturate(self, sprite, amount=SECRET_DESATURATION):
+        """Pull a sprite partway towards grey - `amount` 0.0 to 1.0.
+
+        Full greyscale is already available; this blends the grey copy over
+        the original at a fraction of its alpha so the gems keep their hue,
+        just muted. Results are cached: this runs per gem per frame, and a
+        per-pixel pass every frame would tank the frame rate.
+
+        The cache is keyed by the sprite's own id, so it MUST be dropped
+        whenever the sprite lists are rebuilt - a freed surface's address can
+        be handed to a new one, which would serve a stale image.
+        """
+        key = (id(sprite), round(amount, 3))
+        cached = self._desat.get(key)
+        if cached is not None:
+            return cached
+        out = sprite.copy()
+        grey = self.greyscale(sprite).copy()
+        grey.set_alpha(int(clamp01(amount) * 255))
+        out.blit(grey, (0, 0))
+        self._desat[key] = out
         return out
 
     def gold_tint(self, sprite):
@@ -7706,10 +8056,11 @@ class Game:
                 sprite = (self.mono_flame if mono else self.flame)[gem.kind]
             else:
                 sprite = (self.mono_normal if mono else self.normal)[gem.kind]
-
+        # The secret level mutes the gems slightly rather than tinting them:
+        # the colours are still readable, they just look drained.
         if (self.mode == CAMPAIGN and self.campaign_level_num == SECRET_LEVEL
                 and not self.on_title):
-            return self.gold_tint(sprite)
+            return self.desaturate(sprite)
         return sprite
 
     def fallback_block(self, colour):
@@ -7899,7 +8250,7 @@ class Game:
 
     @staticmethod
     def bar(screen, x, y, w, h, frac, color):
-        screen.blit(translucent((w, h), (255, 255, 255, 34), None, h // 2), (x, y))
+        screen.blit(translucent((w, h), TRACK, None, h // 2), (x, y))
         filled = int(w * clamp01(frac))
         if filled >= h:
             screen.blit(translucent((filled, h), color + (240,), None, h // 2),
@@ -7931,8 +8282,15 @@ class Game:
         else:
             screen.blit(self.font_small.render("SCORE", True, DIM),
                         (x, PANEL_Y + S(26)))
-            self.blit_readout(screen, f"{int(self.shown_score):,}",
-                              x, PANEL_Y + S(48), width, TEXT)
+            if self.secret_glitch:
+                # Display ERROR with jitter
+                error_text = "ERROR"
+                jitter = random.randint(-1, 1)
+                self.blit_readout(screen, error_text,
+                                  x + jitter, PANEL_Y + S(48), width, (255, 100, 100))
+            else:
+                self.blit_readout(screen, f"{int(self.shown_score):,}",
+                                  x, PANEL_Y + S(48), width, TEXT)
 
         if self.timed:
             low = self.time_left <= LOW_TIME
@@ -7969,7 +8327,12 @@ class Game:
             y = max(PANEL_Y + S(250),
                     getattr(self, "_objective_bottom", 0) + S(14))
             screen.blit(self.font_small.render("SCORING", True, DIM), (x, y))
-            sprite = self.normal[self.lock_kind]
+            # Under MONO the badge has to show the GREY the player is actually
+            # looking at. Showing the original colour told them which gem pays
+            # in a palette that no longer exists on the board, which is both a
+            # spoiler and useless for finding it.
+            sprite = (self.mono_normal if self.extra("mono")
+                      else self.normal)[self.lock_kind]
             screen.blit(sprite, (x, y + 20))
             secs = max(0, int(math.ceil(self.lock_left)))
             screen.blit(self.font_score.render(str(secs), True,
@@ -8072,7 +8435,7 @@ class Game:
             have, need = self.score, goal["target"]
         frac = clamp01(have / max(1, need))
         bar = pygame.Rect(x, y, width, S(6))
-        screen.blit(translucent(bar.size, (255, 255, 255, 38), None, S(3)),
+        screen.blit(translucent(bar.size, TRACK, None, S(3)),
                     bar.topleft)
         if frac > 0:
             screen.blit(translucent((max(S(3), int(width * frac)), bar.height),
@@ -8234,24 +8597,32 @@ class Game:
             area = CAMPAIGN_AREAS[campaign_area_of(self.campaign_level_num)]
             if self.campaign_won:
                 lines = [(self.font_huge, "COMPLETE", (126, 216, 150), 26),
-                         (self.font_score, f"{self.score:,}", (255, 255, 255), 14),  # White score
+                         (self.font_score, "ERROR" if self.secret_glitch else f"{self.score:,}", (255, 255, 255), 14),  # Error in secret mode
                          (self.font_small, "POINTS", DIM, 20),
                          (self.font, f"{area} - level {self.campaign_level_num}",
                           DIM, 0)]
             else:
                 lines = [(self.font_huge, "FAILED", (232, 92, 92), 26),
                          (self.font, self.goal["text"], DIM, 16),
-                         (self.font_score, f"{self.score:,}", (255, 255, 255), 14),  # White score
+                         (self.font_score, "ERROR" if self.secret_glitch else f"{self.score:,}", (255, 255, 255), 14),  # Error in secret mode
                          (self.font_small, "POINTS", DIM, 0)]
         else:
             lines = [(self.font_huge, "TIME UP", TEXT, 30),
-                     (self.font_score, f"{self.score:,}", (255, 255, 255), 14),  # White score
+                     (self.font_score, "ERROR" if self.secret_glitch else f"{self.score:,}", (255, 255, 255), 14),  # Error in secret mode
                      (self.font_small, "POINTS", DIM, 22),
                      (self.font, f"reached level {self.level}", DIM, 0)]
         y = box.y + S(34)
         for font, text, color, gap in lines:
-            image = font.render(text, True, color)
-            screen.blit(image, (box.centerx - image.get_width() // 2, y))
+            # Glitch effect on text in secret mode
+            if self.secret_glitch and "ERROR" in text:
+                # Render with jitter
+                jitter = random.randint(-2, 2)
+                jitter_y = random.randint(-1, 1)
+                image = font.render(text, True, color)
+                screen.blit(image, (box.centerx - image.get_width() // 2 + jitter, y + jitter_y))
+            else:
+                image = font.render(text, True, color)
+                screen.blit(image, (box.centerx - image.get_width() // 2, y))
             y += image.get_height() + gap
 
         if self.finished_main_campaign():
@@ -8335,7 +8706,7 @@ class Game:
         for key, rect, label, blurb in self.setting_rows:
             on = self.settings.get(key, True)
             screen.blit(translucent(rect.size,
-                                    GOLD + (60,) if on else (255, 255, 255, 18),
+                                    ROW_ON if on else ROW_OFF,
                                     None, S(8)), rect.topleft)
             tick = pygame.Rect(rect.x + S(8), rect.centery - S(10), S(20), S(20))
             pygame.draw.rect(screen, TEXT if on else DIM, tick, max(1, S(2)),
@@ -8360,7 +8731,7 @@ class Game:
         for key, rect, label, blurb in self.setting_rows:
             on = self.settings.get(key, True)
             screen.blit(translucent(rect.size,
-                                    GOLD + (60,) if on else (255, 255, 255, 18),
+                                    ROW_ON if on else ROW_OFF,
                                     None, S(8)), rect.topleft)
             tick = pygame.Rect(rect.x + S(8), rect.centery - S(10), S(20), S(20))
             pygame.draw.rect(screen, TEXT if on else DIM, tick, max(1, S(2)),
@@ -8407,8 +8778,13 @@ class Game:
         """
         normal, flame, hyper, _ = build_sprites()
         self.normal, self.flame, self.hyper = normal, flame, hyper
-        self.mono_normal = [self.greyscale(s) for s in self.normal]
-        self.mono_flame = [self.greyscale(s) for s in self.flame]
+        # keyed by id() - the old surfaces are about to be freed and their
+        # addresses reused, so anything cached from them is now a wrong image
+        self._desat = {}
+        self.mono_normal = [self.mono_shade(s, i, len(self.normal))
+                            for i, s in enumerate(self.normal)]
+        self.mono_flame = [self.mono_shade(s, i, len(self.flame))
+                           for i, s in enumerate(self.flame)]
         self.flame_halo = [bake_halo(s, (255, 150, 46)) for s in self.flame]
         self.flame_glint = [bake_glints(s) for s in self.flame]
         self.hyper_glow = bake_halo(self.hyper, (210, 225, 255), 1.42)
@@ -8437,8 +8813,6 @@ class Game:
         self.banner = self.build_banner()
         self.skin = load_ui_skin()
         self.board_bg = self.build_board_backdrop()
-        self.plate = self.skinned("score", SCORE_PLATE.size) \
-            if "SCORE_PLATE" in globals() else None
         self._blocks = {}
         self.frame = None
 
@@ -8466,12 +8840,18 @@ class Game:
             return 214
         return 0
 
-    def draw_wide(self, surface, scale, offset, under):
+    def draw_wide(self, surface, scale, offset, under, veil=True):
         """Effects that should span the WHOLE display, not the 4:3 layer.
 
         Drawn straight onto the display in its own coordinates: background
         motes underneath the UI, flying gems and the level banner on top, so
         in fullscreen they carry on past the letterbox bars.
+
+        `veil=False` suppresses the dimming behind an overlay. On the macOS
+        path the UI is drawn onto THIS surface rather than a separate layer,
+        and draw_scene() multiplies the whole surface down as well - so the
+        two dims stacked and a menu came up on near-black instead of a dimmed
+        picture.
         """
         dw, dh = surface.get_size()
 
@@ -8508,11 +8888,11 @@ class Game:
             if self.state == "banner" and not self.on_title:
                 self.draw_banner_at(surface, place, scale)
 
-            alpha = self.overlay_veil()
+            alpha = self.overlay_veil() if veil else 0
             if alpha:
-                veil = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
-                veil.fill((7, 8, 16, alpha))
-                surface.blit(veil, (0, 0))
+                shade = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+                shade.fill((7, 8, 16, alpha))
+                surface.blit(shade, (0, 0))
             return
 
         # debris still flies over the board, but not over an open menu
@@ -8534,10 +8914,11 @@ class Game:
         dx, alpha = self.banner_pose()
         if alpha <= 0:
             return
-        size = (max(1, int(image.get_width() * scale)),
-                max(1, int(image.get_height() * scale)))
-        art = pygame.transform.smoothscale(image, size)
-        art.set_alpha(max(0, min(255, alpha)))
+        # Same treatment as the flying gems: scale into a surface that is
+        # guaranteed to have per-pixel alpha, and fade by multiplying it
+        # rather than with set_alpha, which on this SDL build leaves a
+        # visible box around the artwork.
+        art = spin_fade(image, 0.0, scale, max(0, min(255, alpha)))
         cx, cy = place(BOARD_X + BOARD_W / 2 + dx, BOARD_Y + BOARD_H / 2)
         surface.blit(art, art.get_rect(center=(int(cx), int(cy))))
 
@@ -8589,13 +8970,16 @@ class Game:
             return self.campaign_bg      # the area's own artwork, or nothing
         return self.background_for_level()
 
-    def draw(self, screen, background=True):
+    def draw(self, screen, background=True, clear=True):
+        if self.doom:
+            self.draw_doom(screen)
+            return
         if self.on_title:
             self.draw_title(screen, background=background)
             self.draw_achievement_tooltip(screen)
             return
         offset = self.shake_offset()
-        
+
         # Draw background directly to screen (no shake applied)
         # Only paint a backdrop when this surface owns it. On the letterboxed
         # path the Display has already drawn the background, and filling here
@@ -8606,34 +8990,32 @@ class Game:
                 screen.fill(BG)
             else:
                 screen.blit(photo, (0, 0))
-        
+
         # Draw board and UI to a temporary surface with shake offset applied
         if offset == (0, 0):
             target = screen
         else:
-            if self.frame is None:
+            if self.frame is None or not (self.frame.get_flags() & pygame.SRCALPHA):
                 self.frame = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
             self.frame.fill((0, 0, 0, 0))
             target = self.frame
 
+        # `clear` is False when the caller has already painted the backdrop
+        # onto this surface - clearing would wipe it out. It only applies to
+        # the surface that actually holds it, never to the shake scratch.
+        keep = (target is screen) and (background or not clear)
         if self.state in ("flyoff", "banner"):
-            self.draw_transition(target, background=False)  # No background, we drew it above
+            self.draw_transition(target, background=False, clear=not keep)
         else:
-            self.draw_scene(target, background=False)  # No background, we drew it above
+            self.draw_scene(target, background=False, clear=not keep)
 
         if target is not screen:
             # Translate (don't scale) the board/UI by the shake offset
             screen.blit(target, offset)
 
-    def flat_fade(self):
-        """0..1 fade used instead of the fly-off when smooth is switched off."""
-        if self.state == "flyoff":
-            return clamp01(self.t / max(0.01, FLYOFF_TIME))
-        return 1.0
-
-    def draw_transition(self, screen, background=True):
+    def draw_transition(self, screen, background=True, clear=True):
         """Gems flying off, then the LEVEL banner over an empty board."""
-        self.draw_scene(screen, background=background)
+        self.draw_scene(screen, background=background, clear=clear)
 
     def update_motes(self, dt):
         if not self.settings.get("particles", True):
@@ -8650,9 +9032,14 @@ class Game:
         draw_wide(), so they are not confined to the 4:3 area."""
         return
 
-    def draw_scene(self, screen, background=True):
+    def draw_scene(self, screen, background=True, clear=True):
         if not background:
-            screen.fill((0, 0, 0, 0))       # UI only, on transparency
+            # `clear` is False when the caller has ALREADY painted the backdrop
+            # onto this surface. The fill below is a transparent clear meant
+            # for the SRCALPHA layer; on an opaque surface the alpha is
+            # ignored and it comes out as solid black, erasing the backdrop.
+            if clear:
+                screen.fill((0, 0, 0, 0))   # UI only, on transparency
         else:
             photo = self.background_for_level()
             if photo is None:
@@ -8687,23 +9074,21 @@ class Game:
                 x, y, scale = self.gem_draw_info(r, c)
                 sprite = self.sprite_for(gem)
                 if self.secret_glitch:
-                    # The gems come apart. Jitter grows and shrinks so it
-                    # surges rather than sitting at a constant buzz, some cells
-                    # show the wrong gem entirely, and some smear sideways.
+                    # Barely visible glitches - mostly clean with rare micro-artifacts
                     surge = 0.45 + 0.55 * abs(math.sin(self.time * 0.7))
-                    jitter = int(TILE * 0.42 * surge)
+                    jitter = int(TILE * 0.01 * surge)  # Minimal jitter (was 0.04)
                     x += random.randint(-jitter, jitter)
                     y += random.randint(-jitter, jitter)
-                    if random.random() < 0.22 * surge:
+                    if random.random() < 0.005 * surge:  # Very rare wrong gem (was 0.02)
                         sprite = self.sprite_for(
                             Gem(random.randrange(N_TYPES)))
-                    if random.random() < 0.16 * surge:
-                        scale *= random.uniform(0.45, 1.8)
-                    if random.random() < 0.10 * surge:
+                    if random.random() < 0.003 * surge:  # Almost never scale shift (was 0.02)
+                        scale *= random.uniform(0.95, 1.05)  # Tiny range (was 0.9, 1.1)
+                    if random.random() < 0.001 * surge:  # Extremely rare ghost (was 0.01)
                         ghost = sprite.copy()
-                        ghost.set_alpha(110)
-                        screen.blit(ghost, (int(x + random.randint(-TILE, TILE)),
-                                            int(y + random.randint(-6, 6))))
+                        ghost.set_alpha(30)  # Very faint (was 50)
+                        screen.blit(ghost, (int(x + random.randint(-1, 1)),
+                                            int(y + random.randint(-1, 1))))
                 if (gem.cell_type == CELL_GEM and gem.power != NORMAL
                         and scale > 0.05):
                     self.draw_behind(screen, gem, x, y)
@@ -8747,12 +9132,14 @@ class Game:
             image = self.banner
             if image is None:
                 image = self.font_huge.render("LEVEL UP", True, TEXT)
-            shown = image.copy()
-            shown.set_alpha(alpha)
+            # set_alpha on an SRCALPHA layer does not composite reliably -
+            # the same reason the title art is dimmed by multiplying.
+            shown = spin_fade(image, 0.0, 1.0, alpha)
             screen.blit(shown, shown.get_rect(center=(cx, cy)))
 
-            label = self.font_score.render(f"LEVEL {self.level}", True, TEXT)
-            label.set_alpha(alpha)
+            label = spin_fade(
+                self.font_score.render(f"LEVEL {self.level}", True, TEXT),
+                0.0, 1.0, alpha)
             screen.blit(label, label.get_rect(
                 center=(cx, cy + image.get_height() // 2 + 26)))
 
@@ -8821,6 +9208,7 @@ class Display:
         # to keep the layer's alpha. Cached pieces for that path.
         self.composite = False
         self._flat = None
+        self._veil = None
         self._base = None
         self._base_key = None
         self.scale = 1.0
@@ -8838,6 +9226,8 @@ class Display:
         the display mode changes - they render black. Windows tolerates it,
         which is why this only showed up on one platform.
         """
+        if MAC_WINDOWED_ONLY:
+            on = False          # windowed only - see MAC_WINDOWED_ONLY
         self.fullscreen = on
         if on:
             self.surface = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
@@ -8889,24 +9279,70 @@ class Display:
         the 4:3 area, so it is only used when it is actually needed.
         """
         forced = os.environ.get("PRISMAC_COMPOSITE", "")
-        if forced in ("1", "true"):
+        if forced in ("0", "false"):
+            # Explicit opt-out: run the probe and believe it.
+            pass
+        elif forced in ("1", "true"):
             self.composite = True
             print("  display: compositing forced on by PRISMAC_COMPOSITE")
+            return
+        elif sys.platform == "darwin":
+            # Measured, not guessed. On macOS the probe blits a layer whose
+            # sampled pixel is (0,0,0,0) onto a marker-filled screen, reads
+            # the marker back and concludes alpha survives - and then the
+            # identical blit in present() writes opaque black. Whatever the
+            # probe touches is not what the real frame does, so it cannot be
+            # relied on here.
+            #
+            # Compositing flattens the backdrop and UI into one opaque
+            # surface first, which has no alpha to lose, and is the path that
+            # already renders correctly in fullscreen. Set
+            # PRISMAC_COMPOSITE=0 to probe anyway.
+            self.composite = True
+            print("  display: macOS - compositing the frame "
+                  "(set PRISMAC_COMPOSITE=0 to probe instead)")
             return
         if self.surface is None:
             return
         if self.direct():
-            # 1:1 and unshifted - the layer is blitted straight over, with no
-            # scaling in between, so there is nothing to test.
-            self.composite = False
+            # No scaling to test, but the layer is still blitted with alpha,
+            # and a build that drops per-pixel alpha does so here too - which
+            # is why assuming this path was safe left a flat 4:3 area in a
+            # 1:1 window. Test the actual blit.
+            marker, patch = (255, 0, 255), (0, 255, 0)
+            self.layer.fill((0, 0, 0, 0))
+            pygame.draw.rect(self.layer, patch, (0, 0, WIDTH // 4, HEIGHT // 4))
+            try:
+                self.surface.fill(marker)
+                self.surface.blit(self.layer, (0, 0))
+                clear = self.surface.get_at((int(WIDTH * 0.62),
+                                             int(HEIGHT * 0.62)))[:3]
+                solid = self.surface.get_at((int(WIDTH * 0.10),
+                                             int(HEIGHT * 0.10)))[:3]
+                kept = (all(abs(a - b) <= 26 for a, b in zip(clear, marker))
+                        and all(abs(a - b) <= 26 for a, b in zip(solid, patch)))
+            except (pygame.error, IndexError, TypeError, ValueError):
+                kept = False
+            self.surface.fill(BG)          # never flipped; wipe the test
+            self.composite = not kept
+            if self.composite:
+                print("  display: this build loses the layer's alpha even at "
+                      "1:1 - compositing instead.")
             return
 
         size = (max(1, int(WIDTH * self.scale)), max(1, int(HEIGHT * self.scale)))
         marker, patch = (255, 0, 255), (0, 255, 0)
         ox, oy = self.offset
-        # A point well inside the viewport that the layer leaves transparent,
-        # and one inside the opaque patch.
-        clear_at = (ox + int(size[0] * 0.62), oy + int(size[1] * 0.62))
+        # Points the layer leaves fully transparent. One sample was not
+        # enough: a build can keep alpha at the spot that happened to be
+        # tested and lose it elsewhere, which passed the probe and then drew
+        # a flat slab over the 4:3 area in play. Spread them out and demand
+        # that EVERY one shows the marker through.
+        clear_points = [
+            (ox + int(size[0] * fx), oy + int(size[1] * fy))
+            for fx, fy in ((0.62, 0.62), (0.50, 0.03), (0.03, 0.50),
+                           (0.97, 0.97), (0.50, 0.97))
+        ]
         solid_at = (ox + int(size[0] * 0.10), oy + int(size[1] * 0.10))
 
         def near(got, want, tol=26):
@@ -8914,6 +9350,13 @@ class Display:
 
         self.layer.fill((0, 0, 0, 0))
         pygame.draw.rect(self.layer, patch, (0, 0, WIDTH // 4, HEIGHT // 4))
+        # A half-transparent band as well: total transparency can survive a
+        # scale that still mangles partial alpha, and the UI is full of it.
+        band = pygame.Surface((WIDTH, max(1, HEIGHT // 12)), pygame.SRCALPHA)
+        band.fill((0, 0, 255, 128))
+        self.layer.blit(band, (0, HEIGHT // 2))
+        blend_at = (ox + int(size[0] * 0.50),
+                    oy + int(size[1] * (0.5 + 1 / 24.0)))
 
         chosen = None
         for candidate in ("smooth_dest", "smooth", "nearest"):
@@ -8922,10 +9365,19 @@ class Display:
             try:
                 self.surface.fill(marker)
                 self.surface.blit(self.scale_layer(size), self.offset)
-                if (near(self.surface.get_at(clear_at), marker)
-                        and near(self.surface.get_at(solid_at), patch)):
-                    chosen = candidate
-                    break
+                if not all(near(self.surface.get_at(p), marker)
+                           for p in clear_points):
+                    continue
+                if not near(self.surface.get_at(solid_at), patch):
+                    continue
+                # Half alpha over magenta should land between the two, not on
+                # either. If it comes back as the pure band colour the alpha
+                # was dropped.
+                got = self.surface.get_at(blend_at)[:3]
+                if near(got, (0, 0, 255), tol=40):
+                    continue
+                chosen = candidate
+                break
             except (pygame.error, IndexError, TypeError, ValueError):
                 continue
 
@@ -9032,11 +9484,25 @@ class Display:
             self._scaled.blit(pygame.transform.scale(self.layer, size), (0, 0))
         return self._scaled
 
-    def flatten(self, base):
-        """Backdrop and UI on one OPAQUE surface, ready to be scaled safely."""
+    def flatten(self, base, veil=0):
+        """Backdrop and UI on one OPAQUE surface, ready to be scaled safely.
+
+        `veil` is the dimming alpha behind an open overlay. It has to be
+        applied HERE, between the backdrop and the UI: draw_wide already put
+        it on the display, but this path then paints over the viewport with a
+        freshly built backdrop, which wiped it out inside the 4:3 area while
+        the letterbox bars stayed dim.
+        """
         if self._flat is None or self._flat.get_size() != (WIDTH, HEIGHT):
             self._flat = pygame.Surface((WIDTH, HEIGHT))
         self._flat.blit(base, (0, 0))
+        if veil:
+            # same colour draw_wide uses, so the bars and the viewport match
+            if (self._veil is None
+                    or self._veil.get_size() != (WIDTH, HEIGHT)):
+                self._veil = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            self._veil.fill((7, 8, 16, veil))
+            self._flat.blit(self._veil, (0, 0))
         self._flat.blit(self.layer, (0, 0))
         return self._flat
 
@@ -9106,6 +9572,48 @@ class Display:
             self.surface.blit(faded, pos)
 
     def present(self, game):
+        if game.doom:
+            # No backdrop, no wide effects, no letterbox bars in BG - the
+            # whole window, edge to edge, is black.
+            self.surface.fill((0, 0, 0))
+            self.layer.fill((0, 0, 0, 0))
+            game.draw(self.layer, background=False)
+            self.surface.blit(
+                self.layer if self.direct() else pygame.transform.smoothscale(
+                    self.layer, (max(1, int(WIDTH * self.scale)),
+                                 max(1, int(HEIGHT * self.scale)))),
+                (0, 0) if self.direct() else self.offset)
+            pygame.display.flip()
+            return
+        if MAC_WINDOWED_ONLY:
+            # One opaque pass, built in the same order as the normal path so
+            # nothing is skipped:
+            #   backdrop -> draw_wide(under) -> UI -> draw_wide(over)
+            #
+            # backdrop_photo() is the canonical source. An earlier version let
+            # game.draw() paint its own backdrop, which routed through
+            # background_for_level() and lost the title and campaign-preview
+            # cases. And it only ran draw_wide's OVER pass, which dropped the
+            # background particles - they live in the under pass.
+            photo = game.backdrop_photo()
+            if photo is None:
+                self.surface.fill(BG)
+            elif photo.get_size() == (WIDTH, HEIGHT):
+                self.surface.blit(photo, (0, 0))
+            else:
+                # A backdrop built for a different layer size, e.g. straight
+                # after a render-scale change.
+                self.surface.blit(
+                    pygame.transform.smoothscale(photo, (WIDTH, HEIGHT)), (0, 0))
+            # veil=False: draw_scene() dims this same surface, and doing it
+            # here as well stacked the two into near-black.
+            game.draw_wide(self.surface, 1.0, (0, 0), under=True, veil=False)
+            # clear=False: the backdrop is already on this surface, and the
+            # usual transparent clear would black it out on an opaque target.
+            game.draw(self.surface, background=False, clear=False)
+            game.draw_wide(self.surface, 1.0, (0, 0), under=False)
+            pygame.display.flip()
+            return
         self.surface.fill(BG)
         outgoing, photo, blend = game.backdrop_pair()
         # Always lay the current backdrop down flat first. The sliding copies
@@ -9126,23 +9634,30 @@ class Display:
         self.layer.fill((0, 0, 0, 0))
         game.draw(self.layer, background=False)
 
-        if self.direct():
+        if self.composite:
+            # Checked BEFORE direct(): compositing is the fallback for a
+            # build that cannot be trusted with the layer's alpha, and a 1:1
+            # window blits that same layer. Taking the direct path here left
+            # the backdrop covered in windowed mode while fullscreen, which
+            # letterboxes and so scales, came out right.
+            flat = self.flatten(
+                self.viewport_backdrop(outgoing, photo, blend),
+                game.overlay_veil())
+            if self.direct():
+                self.surface.blit(flat, self.offset)
+            else:
+                size = (max(1, int(WIDTH * self.scale)),
+                        max(1, int(HEIGHT * self.scale)))
+                self.surface.blit(
+                    pygame.transform.smoothscale(flat, size), self.offset)
+        elif self.direct():
             # 1:1, no scaling in between - the layer goes straight over the
             # backdrop and its alpha is never touched.
             self.surface.blit(self.layer, (0, 0))
         else:
             size = (max(1, int(WIDTH * self.scale)),
                     max(1, int(HEIGHT * self.scale)))
-            if self.composite:
-                # Flatten first, scale second. The surface being scaled is
-                # opaque, so a build that mangles alpha cannot black out the
-                # 4:3 area - it has no alpha left to mangle.
-                flat = self.flatten(
-                    self.viewport_backdrop(outgoing, photo, blend))
-                self.surface.blit(
-                    pygame.transform.smoothscale(flat, size), self.offset)
-            else:
-                self.surface.blit(self.scale_layer(size), self.offset)
+            self.surface.blit(self.scale_layer(size), self.offset)
 
         game.draw_wide(self.surface, self.scale, self.offset, under=False)
         pygame.display.flip()
@@ -9286,7 +9801,7 @@ def main():
     # a surface converted for the previous display format comes back black.
     prefs = read_settings().get("settings")
     prefs = prefs if isinstance(prefs, dict) else {}
-    want_fullscreen = prefs.get("fullscreen") is True
+    want_fullscreen = prefs.get("fullscreen") is True and not MAC_WINDOWED_ONLY
     want_scale = prefs.get("render_scale")
     if (want_fullscreen and isinstance(want_scale, (int, float))
             and any(abs(want_scale - f) < 0.01 for f, _ in SCALE_OPTIONS)):
@@ -9394,6 +9909,10 @@ def main():
             if e.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
+            elif game.doom:
+                # Nothing responds. The only way out is the window close
+                # above, or waiting for it to go.
+                continue
             elif e.type == pygame.KEYDOWN and not game.data_wiped:
                 if e.key == pygame.K_ESCAPE:
                     if game.music_open:
