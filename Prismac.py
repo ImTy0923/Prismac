@@ -291,11 +291,11 @@ CAMPAIGN_SCORE_BONUS = 0.14        # per area, compounding on the base score
 # (key, title shown when it is won, how it is earned)
 STAR_DEFS = (
     ("endless100", "ENDLESS 100", "REACHED LEVEL 100 IN ''ENDLESS''"),
-    ("deep",       "MUST GO DEEPER",  "BEAT ''THE DEEP'' IN CAMPAIGN"),
+    ("deep",       "MUST GO DEEPER",  "CLEARED ''THE DEEP'' IN CAMPAIGN"),
     # Deliberately vague: this star now needs the final level of the Unknown
     # Planet, and the tooltip is visible from the title screen long before
     # that area exists. Naming it there would give the secret away.
-    ("space",      "ORBITER",     "CLEAR EVERY CAMPAIGN LEVEL"),
+    ("space",      "ORBITER",     "CLEARED EVERY CAMPAIGN LEVEL"),
 )
 ENDLESS_STAR_LEVEL = 100
 
@@ -4100,7 +4100,7 @@ class Game:
         sbox = self.space_banner_rect()
         self.space_buttons = [
             Button((sbox.centerx - S(110), sbox.bottom - S(64), S(220), S(46)),
-                   "VISIT SPACE", self.close_space_banner,
+                   "Go", self.close_space_banner,
                    accent=(96, 200, 232)),
         ]
 
@@ -4735,7 +4735,8 @@ class Game:
         # The campaign picker takes over the screen with the area's own
         # artwork behind it, so the logo and the credits line are held back -
         # they belong to the title screen, not to an area.
-        art = None if self.campaign_open else self.title_art
+        # The secret picker also hides all of this.
+        art = None if (self.campaign_open or self.secret_open) else self.title_art
         if art is not None:
             # a slow bob plus a gentle brightness shimmer
             bob = int(6 * math.sin(self.time * 1.5))
@@ -4762,12 +4763,15 @@ class Game:
         # The campaign picker replaces the title screen rather than sitting on
         # top of it, so the mode chooser goes away with the logo. Behind a
         # translucent panel it would otherwise still read through.
+        # The secret picker also hides stars and mode selection.
         if not (self.campaign_open or self.secret_open):
             # achievement row, just under the logo
             self.draw_stars(screen, S(232))
 
         if self.campaign_open:
             pass
+        elif self.secret_open:
+            pass  # Hide all UI elements (title, gamemodes, "choose game mode" label)
         elif self.loading:
             self.draw_load_bar(screen, S(470))
         elif self.title_ready:
@@ -4971,10 +4975,10 @@ class Game:
         box = self.space_banner_rect()
         screen.blit(translucent(box.size, DIALOG_FILL, (96, 200, 232, 250),
                                 S(16)), box.topleft)
-        lines = [(self.font_big, "NEW AREA UNLOCKED", (96, 200, 232), S(18)),
-                 (self.font_huge, "SPACE", (255, 255, 255), S(16)),  # White instead of GOLD
-                 (self.font_small,
-                  f"{SPACE_LEVELS} LEVELS, AND THEY ARE BRUTAL", DIM, 0)]
+        lines = [
+            (self.font_big, "NEW AREA UNLOCKED", (96, 200, 232), S(18)),
+            (self.font_huge, "???", (255, 255, 255), S(16)),  # White instead of GOLD
+        ]
         y = box.y + S(30)
         for font, text, colour, gap in lines:
             image = font.render(text, True, colour)
@@ -5573,27 +5577,8 @@ class Game:
 
     def draw_note(self, screen, x, y, width):
         """Draw the note line, fading in and out."""
-        if not self.note:
-            return
-        # Fade in first 0.3s, out after 2.0s, total 2.5s
-        fade_in = min(1.0, self.note_time / 0.3)
-        fade_out = max(0.0, 1.0 - (self.note_time - 2.0) / 0.5) if self.note_time > 2.0 else 1.0
-        alpha = fade_in * fade_out
-        if self.bubbly:
-            # drifts up a few pixels as it appears, so it does not just blink on
-            y += int(round(10 * (1.0 - ease_out(fade_in))))
-        
-        # Use white for all messages (removed gold text banners)
-        color = (255, 255, 255)  # White text for all notes/messages
-        
-        # Render text
-        label = self.font.render(self.note, True, color)
-        label = label.copy()
-        label.set_alpha(int(255 * alpha))
-        
-        # Center text
-        text_rect = label.get_rect(center=(x + width // 2, y))
-        screen.blit(label, text_rect)
+        # All note popups disabled
+        return
 
     def add_shake(self, amount):
         if not self.settings.get("shake", True):
@@ -5912,6 +5897,9 @@ class Game:
 
     def panel_buttons(self):
         """The side-panel buttons for the current mode."""
+        # Hide all buttons in secret mode
+        if self.secret_glitch:
+            return []
         return self.campaign_panel if self.mode == CAMPAIGN else self.buttons
 
     def build_widgets(self):
@@ -6148,6 +6136,11 @@ class Game:
     # -- button actions ---------------------------------------------------
 
     def show_hint(self):
+        # No hints in secret mode - it's corrupted!
+        if self.secret_glitch:
+            if not self.on_title:
+                self.quit()
+            return
         # No hints in Space area - it's brutal!
         if self.in_space():
             self.audio.play("menuclick")
@@ -6191,6 +6184,9 @@ class Game:
 
     def open_music(self):
         """Song picker. Choosing one plays it, then the shuffle resumes."""
+        # Prevent opening music picker in secret mode
+        if self.secret_glitch:
+            return
         if self.locked_picker("MUSIC"):
             return
         self.music_open = True
@@ -6314,6 +6310,9 @@ class Game:
 
     def open_background_picker(self):
         """Open the background picker dialog."""
+        # Prevent opening background picker in secret mode
+        if self.secret_glitch:
+            return
         if self.locked_picker("BACKGROUND"):
             return
         self.bg_picker_open = True
@@ -6573,6 +6572,11 @@ class Game:
     def open_menu(self):
         # The picker is a whole screen, not a panel, so the menu takes over
         # from it rather than sitting on top.
+        # Prevent opening menu in secret mode
+        if self.secret_glitch:
+            if not self.on_title:
+                self.quit()
+            return
         if self.campaign_open:
             self.close_campaign()
         self.sync_menu_labels()
@@ -7677,6 +7681,14 @@ class Game:
         out.unlock()
         return out
 
+    def gold_tint(self, sprite):
+        """Tint a sprite to a dark yellow / gold palette for secret level 71."""
+        out = sprite.copy()
+        tint = pygame.Surface(sprite.get_size(), pygame.SRCALPHA)
+        tint.fill((214, 152, 42, 255))
+        out.blit(tint, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+        return out
+
     def sprite_for(self, gem):
         if gem.cell_type == CELL_EMPTY:
             return self.blank_tile
@@ -7687,11 +7699,18 @@ class Game:
         if gem.cell_type == CELL_BOMB:
             return self.chaos_art.get("bomb") or self.fallback_block((60, 60, 66))
         if gem.power == HYPER:
-            return self.hyper
-        mono = self.extra("mono")
-        if gem.power == FLAME:
-            return (self.mono_flame if mono else self.flame)[gem.kind]
-        return (self.mono_normal if mono else self.normal)[gem.kind]
+            sprite = self.hyper
+        else:
+            mono = self.extra("mono")
+            if gem.power == FLAME:
+                sprite = (self.mono_flame if mono else self.flame)[gem.kind]
+            else:
+                sprite = (self.mono_normal if mono else self.normal)[gem.kind]
+
+        if (self.mode == CAMPAIGN and self.campaign_level_num == SECRET_LEVEL
+                and not self.on_title):
+            return self.gold_tint(sprite)
+        return sprite
 
     def fallback_block(self, colour):
         """Drawn shape for a rock or bomb when its art is missing, so the
@@ -8761,13 +8780,14 @@ class Game:
                            1.0 + 0.6 * abs(math.sin(self.time * 0.9)))
 
         # Draw menus last so they appear on top
-        if self.menu_open:
+        # Hide menu, music, and background picker in secret mode
+        if self.menu_open and not self.secret_glitch:
             self.draw_menu(screen)
         if self.wipe_open:
             self.draw_wipe(screen)
-        if self.music_open:
+        if self.music_open and not self.secret_glitch:
             self.draw_music(screen)
-        if self.bg_picker_open:
+        if self.bg_picker_open and not self.secret_glitch:
             self.draw_background_picker(screen)
         # One dialog at a time. Winning the level that earns a star put the
         # star popup straight on top of the COMPLETE screen, obscuring it;
@@ -9382,24 +9402,10 @@ def main():
                         game.close_menu()
                     else:
                         game.open_menu()
-                elif e.key == pygame.K_r:
-                    game.reset()
-                elif e.key == pygame.K_m:
-                    game.note = "muted" if audio.toggle_mute() else ""
                 elif e.key in SECRET_SHUFFLE_KEYS:
                     game.secret_shuffle()
-                elif e.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
-                    audio.nudge_volume(-VOLUME_STEP)
-                elif e.key in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
-                    audio.nudge_volume(VOLUME_STEP)
-                elif e.key == pygame.K_h:
-                    game.show_hint()
                 elif e.key == pygame.K_F11:
                     game.toggle_fullscreen()
-                elif e.key == pygame.K_n:
-                    game.open_music()
-                elif e.key == pygame.K_t:
-                    game.set_mode(TIMED if game.mode == ENDLESS else ENDLESS)
             elif e.type == MUSIC_END:
                 audio.next_track()
             elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
