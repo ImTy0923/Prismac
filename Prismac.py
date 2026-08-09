@@ -92,9 +92,21 @@ BASE_FONTS = {"huge": 7, "score": 5, "big": 3, "body": 2, "small": 2,
 RENDER_SCALE = 1.0
 
 
+_S_MEMO = {}
+
+
 def S(n):
-    """Scale an authored 1080x810 pixel number to the current render scale."""
-    return int(n * RENDER_SCALE)
+    """Scale an authored 1080x810 pixel number to the current render scale.
+
+    Memoised. S() is called several hundred times per frame from the draw
+    code, and a dict hit is measurably cheaper than a float multiply plus
+    int() plus the two object allocations those make. apply_render_scale()
+    clears the memo, which is the only place RENDER_SCALE ever changes.
+    """
+    cached = _S_MEMO.get(n)
+    if cached is None:
+        cached = _S_MEMO[n] = int(n * RENDER_SCALE)
+    return cached
 
 
 def font_scale(name):
@@ -131,6 +143,9 @@ def apply_render_scale(k):
     global PANEL_Y, EXTRA_ROW, FONT_SCALE, PANEL_X, PANEL_H
     global BOARD_W, BOARD_H, BOARD_X, BOARD_Y
     RENDER_SCALE = float(k)
+    # Every S() answer and every cached surface built from one is now stale.
+    _S_MEMO.clear()
+    clear_render_caches()
     WIDTH, HEIGHT = S(BASE_WIDTH), S(BASE_HEIGHT)
     TILE = S(BASE_TILE)
     MARGIN = S(BASE_MARGIN)
@@ -170,7 +185,11 @@ FPS_OPTIONS = (
     (30, "30"), (60, "60"), (120, "120"),
     (144, "144"), (165, "165"), (240, "240"), (360, "360"),
 )
-DEFAULT_FPS = 60
+# 120 by default. The loop is capped by Clock.tick(), so the cap is a hard
+# ceiling no matter how much headroom the frame has - at 60 the game simply
+# could not run faster than 60 however fast it drew. Anything the machine
+# cannot sustain just falls short of the cap; it costs nothing to ask for.
+DEFAULT_FPS = 120
 
 
 def fps_label(value):
@@ -829,15 +848,16 @@ PANEL_FILL = _glass((34, 40, 66), 245)
 PANEL_EDGE = (108, 128, 196, 160)
 # Dialog boxes are NOT glass: the side panel wants to show the board through
 # it, but a menu you are reading needs to be solid.
-DIALOG_FILL = (20, 25, 44, 255)
+# Lowered from 255 to 200 so that reduce-transparency can make them fully opaque
+# when needed, but default to semi-transparent to show the backdrop.
+DIALOG_FILL = (20, 25, 44, 200)
 DIALOG_EDGE = (84, 100, 152, 190)
 # The big "pick something" screens - resume, timed duration, extras and the
 # campaign level selectors - take over the whole view rather than sitting in a
 # corner, and reading them against a flat slab hid the artwork completely.
-# These keep some backdrop showing through, and are passed solid=False so the
-# reduce-transparency option leaves them alone: forcing them to 255 is exactly
-# what made them opaque.
-PICKER_FILL = (20, 25, 44, 214)
+# These keep some backdrop showing through. Lowered from 214 to 170 for more
+# transparency that respects the OPAQUE_UI setting.
+PICKER_FILL = (20, 25, 44, 170)
 BOARD_FILL = _glass((26, 31, 54), 230)
 CELL_HI = (140, 168, 255, 20)          # the lighter checker squares
 BTN = _glass((48, 58, 96), 248)
@@ -930,7 +950,6 @@ SETTINGS_FILE = os.path.join(SAVES_DIR, "prismac_settings.json")
 # "smooth animation" off keeps the same timings but drops the springiness
 WIPE_HOLD = 3.0            # seconds YES must be held to erase save data
 RESUME_HOLD = 1.5          # seconds NO must be held to bin a saved run
-SAVED_MODES = (ENDLESS, SHAPES) if False else ("endless", "shapes")
 
 # The credits roll. ("h", ...) is a heading, ("r", ...) a rule, ("", ...)
 # a plain line, and ("s", ...) a blank spacer.
@@ -2617,6 +2636,44 @@ _MISSING = ("11111", "10001", "10001", "10001", "10001", "10001", "11111")
 
 
 
+class CachedFont:
+    """pygame.font.Font with a render memo, matching PixelFont's behaviour.
+
+    Rasterising a glyph run is not cheap, and the side panel re-renders the same
+    dozen labels every frame. PixelFont has always cached internally; a .ttf
+    dropped into fonts/ went through pygame.font.Font, which does not - so the
+    built-in face was quietly faster than a custom one. This closes that gap.
+
+    Results are SHARED. Anything that mutates one (set_alpha, fill) must copy
+    first, exactly as with PixelFont.
+    """
+
+    __slots__ = ("font", "_cache")
+
+    def __init__(self, font):
+        self.font = font
+        self._cache = {}
+
+    def __getattr__(self, name):
+        return getattr(self.font, name)
+
+    def size(self, text):
+        return self.font.size(text)
+
+    def get_height(self):
+        return self.font.get_height()
+
+    def render(self, text, _aa=True, color=(255, 255, 255)):
+        key = (text, tuple(color))
+        cached = self._cache.get(key)
+        if cached is None:
+            cached = self.font.render(text, True, color)
+            if len(self._cache) > 400:
+                self._cache.clear()
+            self._cache[key] = cached
+        return cached
+
+
 def load_font(scale, bold=False):
     """A pixel .ttf in fonts/ wins if you drop one in; otherwise the built-in
     bitmap face at `scale` device pixels per font pixel."""
@@ -2624,8 +2681,8 @@ def load_font(scale, bold=False):
         for filename in sorted(os.listdir(FONT_DIR)):
             if os.path.splitext(filename)[1].lower() in (".ttf", ".otf"):
                 try:
-                    return pygame.font.Font(os.path.join(FONT_DIR, filename),
-                                            scale * GLYPH_H)
+                    return CachedFont(pygame.font.Font(
+                        os.path.join(FONT_DIR, filename), scale * GLYPH_H))
                 except pygame.error:
                     break
     return PixelFont(scale, bold=bold)
@@ -2704,7 +2761,9 @@ def engraved(font, text, color=SKIN_TEXT):
     drop = max(2, FONT_SCALE)
     out = pygame.Surface((body.get_width() + drop, body.get_height() + drop),
                          pygame.SRCALPHA)
-    shadow = font.render(text, True, (0, 0, 0))
+    # copy: render() is cached, and set_alpha on the shared surface would leak
+    # into the next caller that draws this string in black
+    shadow = font.render(text, True, (0, 0, 0)).copy()
     shadow.set_alpha(180)
     out.blit(shadow, (drop, drop))
     out.blit(body, (0, 0))
@@ -3108,8 +3167,14 @@ def pack_grid(grid):
 
 
 def unpack_grid(raw):
-    """Rebuild a saved grid, or None to mean "deal a fresh board"."""
-    """Rebuild a grid, or None if the data does not fit the current board."""
+    """Rebuild a saved grid, or None to mean "deal a fresh board".
+
+    Every failure here returns None rather than raising: a save file that has
+    been hand-edited, truncated or written by a different build must cost the
+    player a fresh board, never a crash on startup. The guard covers the whole
+    cell body, not just the unpack - a non-numeric kind or fuse would
+    otherwise raise straight past it.
+    """
     if not isinstance(raw, list) or len(raw) != ROWS:
         return None
     grid = []
@@ -3120,18 +3185,23 @@ def unpack_grid(raw):
         for entry in row:
             try:
                 ctype, kind, power, bonus, fuse = entry
+                if ctype == CELL_EMPTY:
+                    cells.append(Gem.empty())
+                elif ctype == CELL_ROCK:
+                    cells.append(Gem.rock())
+                elif ctype == CELL_BOMB:
+                    # A stored fuse of 0 is a bomb that was about to go off,
+                    # so it stays at 0 rather than being rearmed. Only a
+                    # missing value falls through to a fresh random fuse.
+                    cells.append(Gem.bomb(None if fuse is None
+                                          else max(0, int(fuse))))
+                else:
+                    kind, power = int(kind), int(power)
+                    if power != HYPER and not (0 <= kind < N_TYPES):
+                        return None
+                    cells.append(Gem(kind, power, bool(bonus)))
             except (TypeError, ValueError):
                 return None
-            if ctype == CELL_EMPTY:
-                cells.append(Gem.empty())
-            elif ctype == CELL_ROCK:
-                cells.append(Gem.rock())
-            elif ctype == CELL_BOMB:
-                cells.append(Gem.bomb(int(fuse) or BOMB_FUSE_MIN))
-            else:
-                if power != HYPER and not (0 <= kind < N_TYPES):
-                    return None
-                cells.append(Gem(int(kind), int(power), bool(bonus)))
         grid.append(cells)
     return grid
 
@@ -3222,6 +3292,239 @@ def load_backgrounds(progress=None):
 
 
 OPAQUE_UI = False          # set by the "reduce transparency" option
+
+
+# --------------------------------------------------------------------------
+# Per-frame surface caches.
+#
+# The draw path used to rebuild the same handful of surfaces every single
+# frame: rounded panels, scaled sprites, dimming veils, outline rings. None of
+# them depend on anything but a small set of arguments, so they are built once
+# and looked up thereafter. Everything here is keyed by the *Surface object*
+# rather than id(surface) - a freed surface's address is handed straight to
+# the next one, which would serve the wrong picture back (the same trap the
+# cover() cache documents).
+#
+# Every cache is bounded and cleared wholesale on overflow: the working set is
+# small and stable during play, so a plain cap behaves like an LRU without the
+# bookkeeping.
+# --------------------------------------------------------------------------
+
+_SCALE_CACHE = {}
+_SCALE_CAP = 700
+_ROTOZOOM_CACHE = {}
+_ROTOZOOM_CAP = 1200
+_TRANSLUCENT_CACHE = {}
+_TRANSLUCENT_CAP = 400
+_TEXT_CACHE = {}
+_TEXT_CAP = 500
+_FIT_CACHE = {}
+_FIT_CAP = 400
+_TINT_CACHE = {}
+_TINT_CAP = 500
+_MULT_CACHE = {}
+_RING_CACHE = {}
+_RING_CAP = 300
+_DOT_CACHE = {}
+_GLINT_CACHE = {}
+
+
+def clear_render_caches():
+    """Drop everything derived from the old render scale or display format.
+
+    macOS invalidates converted surfaces when the display mode changes, and a
+    scale change makes every baked size wrong, so this runs from both.
+    """
+    _SCALE_CACHE.clear()
+    _ROTOZOOM_CACHE.clear()
+    _TRANSLUCENT_CACHE.clear()
+    _TEXT_CACHE.clear()
+    _FIT_CACHE.clear()
+    _TINT_CACHE.clear()
+    _MULT_CACHE.clear()
+    _RING_CACHE.clear()
+    _DOT_CACHE.clear()
+    _GLINT_CACHE.clear()
+
+
+def scaled_cached(surface, size):
+    """smoothscale, memoised by (surface, size).
+
+    Gems mid-animation, smoke puffs and the flame halo all rescale the same
+    handful of sprites to the same handful of sizes over and over. The scale
+    itself is the expensive part; the lookup is free.
+
+    The result is SHARED - callers must not draw into it. Use set_alpha (which
+    is per-blit state, not pixel data) or take a copy first.
+    """
+    w, h = int(size[0]), int(size[1])
+    if w < 1:
+        w = 1
+    if h < 1:
+        h = 1
+    if (w, h) == surface.get_size():
+        return surface
+    key = (surface, w, h)
+    art = _SCALE_CACHE.get(key)
+    if art is None:
+        art = pygame.transform.smoothscale(surface, (w, h))
+        if len(_SCALE_CACHE) >= _SCALE_CAP:
+            _SCALE_CACHE.clear()
+        _SCALE_CACHE[key] = art
+    return art
+
+
+def rotozoom_cached(surface, angle_step, scale_step, steps=2.0, quant=64.0):
+    """rotozoom, memoised on a quantised angle and scale.
+
+    The halos breathe on a sine, so their angle and swell cycle through a
+    bounded set of values forever - quantising means the cache warms up in the
+    first second and never misses again. `angle_step` is in whole degrees
+    divided by `steps`, `scale_step` in 1/quant units.
+
+    Shared result: do not draw into it.
+    """
+    key = (surface, angle_step, scale_step)
+    art = _ROTOZOOM_CACHE.get(key)
+    if art is None:
+        art = pygame.transform.rotozoom(
+            surface, angle_step * steps, scale_step / quant)
+        if len(_ROTOZOOM_CACHE) >= _ROTOZOOM_CAP:
+            _ROTOZOOM_CACHE.clear()
+        _ROTOZOOM_CACHE[key] = art
+    return art
+
+
+def tinted_cached(surface, tint):
+    """A whole-sprite RGB tint, memoised. Shared result."""
+    if tint >= 255:
+        return surface
+    key = (surface, tint)
+    art = _TINT_CACHE.get(key)
+    if art is None:
+        art = surface.copy()
+        shade = mult_mask(art.get_size(), (tint, tint, tint, 255))
+        art.blit(shade, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+        if len(_TINT_CACHE) >= _TINT_CAP:
+            _TINT_CACHE.clear()
+        _TINT_CACHE[key] = art
+    return art
+
+
+def mult_mask(size, colour):
+    """A flat surface for multiply-blending, cached by size and colour.
+
+    Surface.fill() with a blend flag leaves SDL's optimised blitter and runs a
+    slow generic loop - measurably ~25x slower than blitting a flat surface
+    with the same flag, for pixel-identical output. Every dimming pass and
+    every sprite fade goes through here instead of fill().
+    """
+    key = (size[0], size[1], colour)
+    mask = _MULT_CACHE.get(key)
+    if mask is None:
+        mask = pygame.Surface(size, pygame.SRCALPHA)
+        mask.fill(colour)
+        if len(_MULT_CACHE) > 120:
+            _MULT_CACHE.clear()
+        _MULT_CACHE[key] = mask
+    return mask
+
+
+def multiply_surface(surface, colour):
+    """In-place RGBA multiply over a whole surface, on the fast blitter path.
+
+    Drop-in for surface.fill(colour, special_flags=BLEND_RGBA_MULT) and
+    verified pixel-identical to it across the alpha range on both SRCALPHA and
+    opaque targets.
+    """
+    surface.blit(mult_mask(surface.get_size(), colour), (0, 0),
+                 special_flags=pygame.BLEND_RGBA_MULT)
+    return surface
+
+
+def fade_mult(surface, fade):
+    """Scale a surface's alpha by `fade` (0..255), in place, fast path."""
+    fade = 0 if fade < 0 else (255 if fade > 255 else int(fade))
+    if fade < 255:
+        multiply_surface(surface, (255, 255, 255, fade))
+    return surface
+
+
+def dot_sprite(radius, colour):
+    """A pre-drawn filled circle, cached.
+
+    The background motes used to be drawn as circles onto a freshly allocated
+    full-display SRCALPHA layer which was then blended over the frame - about
+    a millisecond a frame at 1080p, for 46 dots two pixels across. Blitting
+    baked sprites straight onto the target is the same picture for ~3% of the
+    cost.
+    """
+    radius = max(1, int(radius))
+    key = (radius, colour)
+    dot = _DOT_CACHE.get(key)
+    if dot is None:
+        span = radius * 2 + 2
+        dot = pygame.Surface((span, span), pygame.SRCALPHA)
+        pygame.draw.circle(dot, colour, (radius + 1, radius + 1), radius)
+        if len(_DOT_CACHE) > 200:
+            _DOT_CACHE.clear()
+        _DOT_CACHE[key] = dot
+    return dot
+
+
+def outline_ring(size, colour, width, radius):
+    """A rounded outline rectangle, cached. Shared result."""
+    key = (size[0], size[1], colour, width, radius)
+    ring = _RING_CACHE.get(key)
+    if ring is None:
+        ring = pygame.Surface(size, pygame.SRCALPHA)
+        pygame.draw.rect(ring, colour, ring.get_rect(), width,
+                         border_radius=radius)
+        if len(_RING_CACHE) >= _RING_CAP:
+            _RING_CACHE.clear()
+        _RING_CACHE[key] = ring
+    return ring
+
+
+def render_text(font, text, colour):
+    """font.render, memoised by (font, text, colour). Shared result.
+
+    The built-in PixelFont caches internally, but a .ttf dropped into fonts/
+    is a pygame.font.Font, which does not - and the panel re-renders the same
+    dozen labels every frame either way.
+    """
+    key = (font, text, colour)
+    image = _TEXT_CACHE.get(key)
+    if image is None:
+        image = font.render(text, True, colour)
+        if len(_TEXT_CACHE) >= _TEXT_CAP:
+            _TEXT_CACHE.clear()
+        _TEXT_CACHE[key] = image
+    return image
+
+
+def translucent_shared(size, fill, edge=None, radius=14, solid=True):
+    """translucent(), memoised. The result is SHARED between every caller, so
+    it must only ever be blitted - never drawn into.
+
+    Rounded-rect panels are the most-repeated allocation in the frame: every
+    button, slider track, list row, chip and dialog builds one. They only
+    depend on the arguments, so they are built once.
+    """
+    if OPAQUE_UI and solid and len(fill) == 4 and fill[3] > 0:
+        fill = fill[:3] + (255,)
+    key = (size[0], size[1], fill, edge, radius)
+    surf = _TRANSLUCENT_CACHE.get(key)
+    if surf is None:
+        surf = pygame.Surface(size, pygame.SRCALPHA)
+        pygame.draw.rect(surf, fill, surf.get_rect(), border_radius=radius)
+        if edge:
+            pygame.draw.rect(surf, edge, surf.get_rect(), 1,
+                             border_radius=radius)
+        if len(_TRANSLUCENT_CACHE) >= _TRANSLUCENT_CAP:
+            _TRANSLUCENT_CACHE.clear()
+        _TRANSLUCENT_CACHE[key] = surf
+    return surf
 
 
 def translucent(size, fill, edge=None, radius=14, solid=True):
@@ -3662,16 +3965,49 @@ class Audio:
 # game
 # --------------------------------------------------------------------------
 
+def puff_rotations(image):
+    """The 12 rotations of one smoke sprite, built once.
+
+    Keyed by the Surface OBJECT, not id(surface). An id is a memory address and
+    a freed surface hands its address to the next one, so an id key silently
+    serves the wrong artwork back - and worse, a key derived from a per-particle
+    copy never hits at all, which is how this ended up running 12 rotozooms per
+    particle per burst.
+
+    Untinted: the tint is per particle, so baking it here would need one set of
+    rotations per shade and the sharing is the whole point.
+    """
+    frames = _PUFF_ROT_CACHE.get(image)
+    if frames is None:
+        frames = [pygame.transform.rotozoom(image, i * (360.0 / 12), 1.0)
+                  for i in range(12)]
+        if len(_PUFF_ROT_CACHE) > 64:
+            _PUFF_ROT_CACHE.clear()
+        _PUFF_ROT_CACHE[image] = frames
+    return frames
+
+
+_PUFF_ROT_CACHE = {}
+
+
 class Puff:
     """One smoke sprite: bursts outward, slows, swells, rises and fades.
 
     Each puff picks its own sprite from the pieces of smoke.png, so a single
     explosion is made of visibly different shapes rather than one image
     repeated at different sizes.
+
+    Nothing is transformed per frame. The 12 rotations are baked per sprite per
+    tint bucket and shared (see puff_rotations); the swell is quantised and
+    memoised by scaled_cached(); the fade is set_alpha, which is per-blit state
+    rather than a pixel pass. A full 36-particle burst costs a dict lookup and
+    a blit each.
     """
 
     __slots__ = ("image", "x", "y", "dx", "dy", "spin", "t", "life",
-                 "scale0", "scale1", "delay", "tint")
+                 "scale0", "scale1", "delay", "tint", "_frames")
+
+    ROTATIONS = 12          # 30 degrees a frame
 
     def __init__(self, image, x, y, angle=None, force=1.0):
         self.image = image
@@ -3687,6 +4023,9 @@ class Puff:
         self.delay = random.uniform(0.0, 0.14)     # staggered, not one clump
         self.tint = random.randint(196, 255)
         self.t = 0.0
+        # Rotations are shared per sprite; the tint is applied per frame so that
+        # every particle keeps its own exact shade rather than a quantised one.
+        self._frames = puff_rotations(image)
 
     def update(self, dt):
         self.t += dt
@@ -3702,10 +4041,22 @@ class Puff:
         scale = self.scale0 + (self.scale1 - self.scale0) * ease_out(p)
         # fade in briefly so it does not appear at full strength
         alpha = 235 * min(1.0, p * 6.0) * (1.0 - p) ** 1.7
-        image = spin_fade(self.image, self.spin * travel, scale, int(alpha))
-        if self.tint < 255:
-            image.fill((self.tint, self.tint, self.tint, 255),
-                       special_flags=pygame.BLEND_RGBA_MULT)
+
+        frame = self._frames[int((self.spin * travel) / 30.0) % self.ROTATIONS]
+        # Sized from THIS rotation's own width, exactly as the original did.
+        # rotozoom returns a wider surface at 30 degrees than at 0, so sizing
+        # every rotation from frames[0] made the sprite the wrong size.
+        if abs(scale - 1.0) > 0.01:
+            span = max(1, int(frame.get_width() * scale))
+            image = scaled_cached(frame, (span, span)).copy()
+        else:
+            image = frame.copy()
+        # One multiply instead of two. The original faded (alpha *= a/255) and
+        # then tinted (rgb *= tint/255) in separate passes; combining them into
+        # a single (tint, tint, tint, alpha) multiply is arithmetically the same
+        # and goes through the fast blitter.
+        a = 0 if alpha < 0 else (255 if alpha > 255 else int(alpha))
+        multiply_surface(image, (self.tint, self.tint, self.tint, a))
         screen.blit(image, image.get_rect(center=(
             int(self.x + self.dx * travel),
             int(self.y + self.dy * travel - rise))))
@@ -3715,7 +4066,7 @@ class ScorePop:
     """A floating point value that drifts up and fades where a match/explosion occurred."""
 
     LIFE = 1.4
-    __slots__ = ("x", "y", "t", "points", "is_rainbow")
+    __slots__ = ("x", "y", "t", "points", "is_rainbow", "_label_cache")
 
     def __init__(self, x, y, points, is_rainbow=False):
         self.x = x
@@ -3723,6 +4074,7 @@ class ScorePop:
         self.points = points
         self.is_rainbow = is_rainbow
         self.t = 0.0
+        self._label_cache = None  # Lazy-cache the rendered text
 
     def update(self, dt):
         self.t += dt
@@ -3731,23 +4083,24 @@ class ScorePop:
     def draw(self, screen, font):
         progress = self.t / self.LIFE
         
-        # White text for regular scores, rainbow for special events
-        if self.is_rainbow:
-            # Cycle through full rainbow using HSV color space
-            # Hue from 0 to 1 represents the full color spectrum
-            hue = progress % 1.0
-            rgb = colorsys.hsv_to_rgb(hue, 0.9, 1.0)
-            color = tuple(int(c * 255) for c in rgb)
-            label = font.render(str(self.points), True, color)
-        else:
-            label = font.render(str(self.points), True, (255, 255, 255))  # white
+        # OPTIMIZATION: Render text once, cache it, just apply alpha/tint on draw
+        if self._label_cache is None:
+            self._label_cache = font.render(str(self.points), True, (255, 255, 255))
         
-        label = label.copy()
+        label = self._label_cache.copy()
+        
         # Soft fade in over first 0.2s, then fade out
         fade_in = min(1.0, progress * 5.0)  # quick fade in
         fade_out = max(0.0, 1.0 - (progress - 0.6) * 1.67)  # fade out from 60% onwards
         alpha = fade_in * fade_out
         label.set_alpha(int(255 * alpha))
+        
+        # Apply rainbow tint if needed
+        if self.is_rainbow:
+            hue = progress % 1.0
+            rgb = colorsys.hsv_to_rgb(hue, 0.9, 1.0)
+            color = tuple(int(c * 255) for c in rgb)
+            multiply_surface(label, color + (255,))
         # Float up 20 pixels over lifetime with slight bounce
         # Add a little bounce using sine wave
         drift = 20 * ease_out(progress)
@@ -3760,12 +4113,13 @@ class TimePop:
     """A floating "+3s" that drifts up and fades where a bonus gem cleared."""
 
     LIFE = 1.0
-    __slots__ = ("x", "y", "t")
+    __slots__ = ("x", "y", "t", "_label_cache")
 
     def __init__(self, x, y):
         self.x = x
         self.y = y
         self.t = 0.0
+        self._label_cache = None  # Lazy-cache the rendered text
 
     def update(self, dt):
         self.t += dt
@@ -3773,17 +4127,61 @@ class TimePop:
 
     def draw(self, screen, font):
         progress = self.t / self.LIFE
-        label = font.render(f"+{int(BONUS_SECONDS)}S", True, (126, 240, 168))
-        label = label.copy()
+        
+        # OPTIMIZATION: Render text once, cache it, just apply alpha on draw
+        if self._label_cache is None:
+            self._label_cache = font.render(f"+{int(BONUS_SECONDS)}S", True, (126, 240, 168))
+        
+        label = self._label_cache.copy()
         label.set_alpha(int(255 * (1.0 - ease_in_out(progress) ** 1.4)))
         screen.blit(label, label.get_rect(
             center=(self.x, self.y - int(46 * ease_out(progress)))))
 
 
-class FlyingGem:
-    """One gem hurled off the board when a level ends."""
+_FLYER_CROP_CACHE = {}
+_FLYER_ROT_CACHE = {}
 
-    __slots__ = ("image", "x", "y", "dx", "dy", "spin", "delay", "t", "flat")
+
+class FlyingGem:
+    """One gem hurled off the board when a level ends.
+
+    A level transition builds one of these for all 81 cells in a single frame,
+    so nothing here may do real work per instance. Both the mask crop and the
+    12 rotations are cached against the SOURCE sprite - there are only a handful
+    of distinct gem sprites, so the whole board costs a few dict lookups.
+
+    Keying on id(surface) instead is what made this pathological: crop()
+    returns a fresh copy per gem, so every id was new, and the board paid 81
+    mask passes and 972 rotozooms in one frame.
+    """
+
+    __slots__ = ("image", "x", "y", "dx", "dy", "spin", "delay", "t", "flat",
+                 "_frames")
+
+    ROTATIONS = 12          # 30 degrees a frame
+
+    @staticmethod
+    def frames_for(sprite):
+        """Cropped sprite plus its 12 rotations, built once per source sprite."""
+        frames = _FLYER_ROT_CACHE.get(sprite)
+        if frames is None:
+            base = FlyingGem.crop_cached(sprite)
+            frames = [pygame.transform.rotozoom(base, i * (360.0 / 12), 1.0)
+                      for i in range(12)]
+            if len(_FLYER_ROT_CACHE) > 64:
+                _FLYER_ROT_CACHE.clear()
+            _FLYER_ROT_CACHE[sprite] = frames
+        return frames
+
+    @staticmethod
+    def crop_cached(sprite):
+        cropped = _FLYER_CROP_CACHE.get(sprite)
+        if cropped is None:
+            cropped = FlyingGem.crop(sprite)
+            if len(_FLYER_CROP_CACHE) > 64:
+                _FLYER_CROP_CACHE.clear()
+            _FLYER_CROP_CACHE[sprite] = cropped
+        return cropped
 
     @staticmethod
     def crop(sprite):
@@ -3806,7 +4204,8 @@ class FlyingGem:
         return sprite.subsurface(box).copy() if box.width and box.height else sprite
 
     def __init__(self, image, x, y, delay, origin=None, force=1.0, flat=False):
-        self.image = self.crop(image)
+        self._frames = self.frames_for(image)
+        self.image = self.crop_cached(image)
         self.x, self.y = x, y
         self.flat = flat
         if flat:
@@ -3845,7 +4244,14 @@ class FlyingGem:
             surface.blit(art, (int(x), int(y)))
             return
         fade = max(0, int(255 * (1.0 - clamp01(p / 0.75))))
-        image = spin_fade(self.image, self.spin * p, scale, fade)
+        frame = self._frames[int((self.spin * p) / 30.0) % self.ROTATIONS]
+        if abs(scale - 1.0) > 0.01:
+            image = scaled_cached(frame,
+                                  (max(1, int(frame.get_width() * scale)),) * 2)
+        else:
+            image = frame
+        if fade < 255:
+            image = fade_mult(image.copy(), fade)
         drop = 0.0 if self.flat else 900 * p * p     # no gravity in flat mode
         cx, cy = place(self.x + self.dx * p, self.y + self.dy * p + drop)
         surface.blit(image, image.get_rect(center=(int(cx), int(cy))))
@@ -3857,7 +4263,9 @@ class FlyingGem:
                 center=(int(self.x), int(self.y))))
             return
         fade = max(0, int(255 * (1.0 - clamp01(p / 0.75))))
-        image = spin_fade(self.image, self.spin * p, 1.0, fade)
+        image = self._frames[int((self.spin * p) / 30.0) % self.ROTATIONS]
+        if fade < 255:
+            image = fade_mult(image.copy(), fade)
         drop = 0.0 if self.flat else 900 * p * p     # no gravity in flat mode
         screen.blit(image, image.get_rect(center=(
             int(self.x + self.dx * p),
@@ -3891,7 +4299,7 @@ def spin_fade(image, angle, scale, fade):
     if fade < 255:
         # BLEND_RGBA_MULT scales the existing alpha instead of replacing it,
         # so already-transparent pixels stay transparent.
-        out.fill((255, 255, 255, fade), special_flags=pygame.BLEND_RGBA_MULT)
+        fade_mult(out, fade)
     return out
 
 
@@ -3929,7 +4337,7 @@ class ScrollList:
         # Navy, not a white wash. translucent() forces alpha to 255 under
         # "reduce transparency", so (255,255,255,30) became a solid WHITE
         # slab - which is what made the music and background pickers glare.
-        screen.blit(translucent(self.rect.size, LIST_WELL, None, S(8)),
+        screen.blit(translucent_shared(self.rect.size, LIST_WELL, None, S(8)),
                     self.rect.topleft)
         clip = screen.get_clip()
         screen.set_clip(self.rect)
@@ -3937,16 +4345,16 @@ class ScrollList:
         for i in range(top, min(len(self.items), top + self.visible + 1)):
             y = self.rect.y + (i - top) * self.ROW
             if i == self.current:
-                screen.blit(translucent((self.rect.width, self.ROW - S(2)),
-                                        ROW_ON, None, S(6)),
+                screen.blit(translucent_shared((self.rect.width, self.ROW - S(2)),
+                                               ROW_ON, None, S(6)),
                             (self.rect.x, y))
             elif i == self.hover:
-                screen.blit(translucent((self.rect.width, self.ROW - S(2)),
-                                        ROW_HOVER, None, S(6)),
+                screen.blit(translucent_shared((self.rect.width, self.ROW - S(2)),
+                                               ROW_HOVER, None, S(6)),
                             (self.rect.x, y))
             colour = GOLD if i == self.current else TEXT
             label = Button.fit(font, self.items[i], self.rect.width - S(20))
-            image = label.render(self.items[i], True, colour)
+            image = render_text(label, self.items[i], colour)
             screen.blit(image, (self.rect.x + S(10),
                                 y + (self.ROW - image.get_height()) // 2))
         screen.set_clip(clip)
@@ -3955,7 +4363,8 @@ class ScrollList:
         if self.max_offset() > 0:
             span = self.rect.height * self.visible / len(self.items)
             pos = (self.rect.height - span) * self.offset / self.max_offset()
-            screen.blit(translucent((S(4), int(span)), SCROLLBAR, None, S(2)),
+            screen.blit(translucent_shared((S(4), int(span)), SCROLLBAR, None,
+                                           S(2)),
                         (self.rect.right - S(6), self.rect.y + int(pos)))
 
 
@@ -3978,13 +4387,25 @@ class Button:
     @staticmethod
     def fit(font, text, width):
         """Step the font down until the label fits. Pixel glyphs are far
-        wider than proportional ones, so labels overflow easily."""
-        while font.size(text)[0] > width and hasattr(font, "smaller"):
-            smaller = font.smaller()
-            if smaller is font:
-                break
-            font = smaller
-        return font
+        wider than proportional ones, so labels overflow easily.
+
+        Memoised: this ran a measure-and-shrink loop for every button, list row
+        and readout on every frame, and the answer only ever depends on the
+        three arguments.
+        """
+        key = (font, text, width)
+        chosen = _FIT_CACHE.get(key)
+        if chosen is None:
+            chosen = font
+            while chosen.size(text)[0] > width and hasattr(chosen, "smaller"):
+                smaller = chosen.smaller()
+                if smaller is chosen:
+                    break
+                chosen = smaller
+            if len(_FIT_CACHE) >= _FIT_CAP:
+                _FIT_CACHE.clear()
+            _FIT_CACHE[key] = chosen
+        return chosen
 
     def draw(self, screen, font, lift=0.0):
         """`lift` (0..1) eases the button up a couple of pixels and widens it
@@ -4001,12 +4422,14 @@ class Button:
         if lift > 0.01:
             grow = int(round(S(4) * lift))
             rect = self.rect.inflate(grow, grow).move(0, -int(round(S(2) * lift)))
-        screen.blit(translucent(rect.size, fill, PANEL_EDGE, S(10)), rect.topleft)
+        screen.blit(translucent_shared(rect.size, fill, PANEL_EDGE, S(10)),
+                    rect.topleft)
         if self.accent:
             pygame.draw.rect(screen, self.accent,
                              (rect.x, rect.y + S(8), S(3), rect.height - S(16)),
                              border_radius=S(2))
-        text = font.render(self.label, True, TEXT if self.hover else (206, 212, 228))
+        text = render_text(font, self.label,
+                           TEXT if self.hover else (206, 212, 228))
         screen.blit(text, text.get_rect(center=rect.center))
 
 
@@ -4027,22 +4450,22 @@ class Slider:
 
     def draw(self, screen, font, small, dragging=False):
         value = clamp01(self.get())
-        label = small.render(self.label, True, DIM)
+        label = render_text(small, self.label, DIM)
         screen.blit(label, (self.rect.x, self.rect.y - small.get_height() - S(8)))
-        pct = small.render(f"{int(round(value * 100))}%", True, DIM)
+        pct = render_text(small, f"{int(round(value * 100))}%", DIM)
         screen.blit(pct, (self.rect.right - pct.get_width(),
                           self.rect.y - pct.get_height() - S(8)))
 
         # TRACK, not a white wash: under "reduce transparency" translucent()
         # forces alpha to 255 and a white wash turns into a solid white bar.
-        screen.blit(translucent(self.rect.size, TRACK, None,
-                                self.rect.height // 2), self.rect.topleft)
+        screen.blit(translucent_shared(self.rect.size, TRACK, None,
+                                       self.rect.height // 2), self.rect.topleft)
         if value > 0:
             width = int(self.rect.width * value)
             if width >= self.rect.height:
-                screen.blit(translucent((width, self.rect.height),
-                                        SLIDER_FILL, None,
-                                        self.rect.height // 2),
+                screen.blit(translucent_shared((width, self.rect.height),
+                                               SLIDER_FILL, None,
+                                               self.rect.height // 2),
                             self.rect.topleft)
         knob = self.rect.x + int(self.rect.width * value)
         pygame.draw.circle(screen, TEXT, (knob, self.rect.centery),
@@ -4060,6 +4483,11 @@ class Game:
         self.background_names = background_names or []
         # flame gems: a glow shaped like the gem, and a travelling glint
         self._blocks = {}
+        # Baked badges, keyed by the only thing they vary on. See
+        # draw_bonus_tag() and draw_fuse().
+        self._bonus_chips = {}
+        self._fuse_chips = {}
+        self._readouts = {}
         self.blank_tile = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
         self.chaos_art = load_chaos_assets()
         self._desat = {}
@@ -4200,8 +4628,7 @@ class Game:
         pad = S(16)
         out = pygame.Surface((art.get_width() + pad * 2,
                               art.get_height() + pad * 2), pygame.SRCALPHA)
-        shade = art.copy()
-        shade.fill((0, 0, 0, 255), special_flags=pygame.BLEND_RGBA_MULT)
+        shade = multiply_surface(art.copy(), (0, 0, 0, 255))
         for radius in (12, 7, 3):
             blur = pygame.transform.smoothscale(
                 shade, (art.get_width() + radius * 2, art.get_height() + radius * 2))
@@ -4508,7 +4935,7 @@ class Game:
 
     def draw_wipe(self, screen):
         box = self.wipe_rect()
-        screen.blit(translucent(box.size, DIALOG_FILL, (232, 92, 92, 250), S(16)),
+        screen.blit(translucent_shared(box.size, DIALOG_FILL, (232, 92, 92, 250), S(16)),
                     box.topleft)
         lines = [(self.font_big, "ERASE ALL SAVE DATA?", (255, 140, 140)),
                  (self.font_small, "SAVED RUNS AND SETTINGS", DIM),
@@ -4527,7 +4954,7 @@ class Game:
         if frac > 0:
             width = int(yes.rect.width * frac)
             if width > 2:
-                screen.blit(translucent((width, yes.rect.height),
+                screen.blit(translucent_shared((width, yes.rect.height),
                                         (232, 92, 92, 245), None, 10),
                             yes.rect.topleft)
                 label = self.font.render("YES", True, TEXT)
@@ -4577,7 +5004,7 @@ class Game:
 
     def draw_resume(self, screen):
         box = self.resume_rect()
-        screen.blit(translucent(box.size, PICKER_FILL, DIALOG_EDGE, S(16), solid=False),
+        screen.blit(translucent_shared(box.size, PICKER_FILL, DIALOG_EDGE, S(16)),
                     box.topleft)
         entry = read_saves().get(self.resume_mode) or {}
         lines = [(self.font_big, "CONTINUE?", TEXT),
@@ -4600,7 +5027,7 @@ class Game:
         if frac > 0:
             width = int(no.rect.width * frac)
             if width > S(2):
-                screen.blit(translucent((width, no.rect.height),
+                screen.blit(translucent_shared((width, no.rect.height),
                                         (232, 92, 92, 245), None, S(10)),
                             no.rect.topleft)
                 label = self.font.render("NO", True, TEXT)
@@ -4608,7 +5035,7 @@ class Game:
 
     def draw_duration_picker(self, screen):
         box = self.duration_picker_rect()
-        screen.blit(translucent(box.size, PICKER_FILL, DIALOG_EDGE, S(16), solid=False),
+        screen.blit(translucent_shared(box.size, PICKER_FILL, DIALOG_EDGE, S(16)),
                     box.topleft)
         title = self.font_big.render("SELECT DURATION", True, TEXT)
         screen.blit(title, (box.centerx - title.get_width() // 2, box.y + S(20)))
@@ -5022,7 +5449,7 @@ class Game:
                 button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
         else:
             pulse = 0.5 + 0.5 * math.sin(self.time * 3.0)
-            prompt = self.font_big.render("CLICK TO START", True, TEXT)
+            prompt = self.font_big.render("CLICK TO START", True, TEXT).copy()
             prompt.set_alpha(int(120 + 135 * pulse))
             screen.blit(prompt, prompt.get_rect(center=(WIDTH // 2, S(470))))
 
@@ -5032,7 +5459,9 @@ class Game:
         alpha = self.overlay_veil()
         if alpha:
             k = max(0, 255 - alpha)
-            screen.fill((k, k, k, 255), special_flags=pygame.BLEND_RGBA_MULT)
+            # multiply_surface, not fill(BLEND_RGBA_MULT): same pixels, and a
+            # blit stays on SDL's optimised path where a blended fill does not
+            multiply_surface(screen, (k, k, k, 255))
 
         if self.data_wiped:
             self.draw_wiped(screen)
@@ -5078,14 +5507,14 @@ class Game:
         bar_y = y - bar_h // 2
         radius = bar_h // 2
 
-        screen.blit(translucent((bar_w, bar_h), (10, 13, 26, 200),
+        screen.blit(translucent_shared((bar_w, bar_h), (10, 13, 26, 200),
                                 (150, 172, 240, 120), radius, solid=False),
                     (bar_x, bar_y))
         fill_w = int(bar_w * done)
         if fill_w >= 2:
             # Clamp the fill's own radius, or a nearly-empty bar renders as a
             # squashed blob rather than a small pill.
-            screen.blit(translucent((fill_w, bar_h), GOLD + (255,), None,
+            screen.blit(translucent_shared((fill_w, bar_h), GOLD + (255,), None,
                                     min(radius, fill_w // 2)), (bar_x, bar_y))
 
         pct = self.font.render(f"{int(done * 100)}%", True, TEXT)
@@ -5108,8 +5537,7 @@ class Game:
             if not earned:
                 # unearned: flattened to a dark silhouette so the row still
                 # shows how many there are to collect
-                image = image.copy()
-                image.fill((70, 74, 92, 190), special_flags=pygame.BLEND_RGBA_MULT)
+                image = multiply_surface(image.copy(), (70, 74, 92, 190))
             screen.blit(image, rect.topleft)
             return
         points = []
@@ -5151,7 +5579,7 @@ class Game:
 
     def draw_star_banner(self, screen):
         box = self.star_banner_rect()
-        screen.blit(translucent(box.size, DIALOG_FILL, GOLD + (250,), S(16)),
+        screen.blit(translucent_shared(box.size, DIALOG_FILL, GOLD + (250,), S(16)),
                     box.topleft)
         big = self.star_size() * 2
         self.draw_star(screen, pygame.Rect(box.centerx - big // 2,
@@ -5205,7 +5633,7 @@ class Game:
         
         # Draw tooltip background with rounded corners and transparency matching button style
         bg_rect = pygame.Rect(tooltip_x, tooltip_y, tooltip_w, tooltip_h)
-        screen.blit(translucent(bg_rect.size, PANEL_FILL, PANEL_EDGE, S(12)), bg_rect.topleft)
+        screen.blit(translucent_shared(bg_rect.size, PANEL_FILL, PANEL_EDGE, S(12)), bg_rect.topleft)
         
         # Draw text
         screen.blit(title_surf, (tooltip_x + padding, tooltip_y + padding))
@@ -5213,7 +5641,7 @@ class Game:
 
     def draw_space_banner(self, screen):
         box = self.space_banner_rect()
-        screen.blit(translucent(box.size, DIALOG_FILL, (96, 200, 232, 250),
+        screen.blit(translucent_shared(box.size, DIALOG_FILL, (96, 200, 232, 250),
                                 S(16)), box.topleft)
         lines = [
             (self.font_big, "NEW AREA UNLOCKED", (96, 200, 232), S(18)),
@@ -5261,8 +5689,7 @@ class Game:
         supposed to say. The whole panel is torn apart before it is blitted."""
         box = self.secret_rect()
         panel = pygame.Surface(box.size, pygame.SRCALPHA)
-        panel.blit(translucent(box.size, PICKER_FILL, (232, 40, 90, 250), S(16),
-                               solid=False),
+        panel.blit(translucent_shared(box.size, PICKER_FILL, (232, 40, 90, 250), S(16)),
                    (0, 0))
 
         title = self.font_big.render(glitch_text(9, salt=1, clock=self.time),
@@ -5281,7 +5708,7 @@ class Game:
         # The one row. No number, no objective, no modifier list - just noise
         # where each of those should be.
         row = self.secret_row_rect().move(-box.x, -box.y)
-        panel.blit(translucent(row.size, (232, 40, 90, 60), None, S(8)),
+        panel.blit(translucent_shared(row.size, (232, 40, 90, 60), None, S(8)),
                    row.topleft)
         lab = self.font.render(glitch_text(8, salt=5, clock=self.time), True, TEXT)
         panel.blit(lab, (row.x + S(14), row.y + S(6)))
@@ -5305,7 +5732,7 @@ class Game:
 
     def draw_campaign(self, screen):
         box = self.campaign_rect()
-        screen.blit(translucent(box.size, PICKER_FILL, DIALOG_EDGE, S(16), solid=False),
+        screen.blit(translucent_shared(box.size, PICKER_FILL, DIALOG_EDGE, S(16)),
                     box.topleft)
         title = self.font_big.render("CAMPAIGN", True, TEXT)
         screen.blit(title, (box.x + S(24), box.y + S(22)))
@@ -5328,7 +5755,7 @@ class Game:
                 else (self.campaign_area < self.furthest_area())
             r = arrow.rect
             tint = (96, 200, 232) if live else (90, 96, 110)
-            screen.blit(translucent(r.size,
+            screen.blit(translucent_shared(r.size,
                                     (255, 255, 255, 30 if live else 12),
                                     None, S(8)), r.topleft)
             # The bitmap face has no < or > glyph, so the arrowheads are
@@ -5369,7 +5796,7 @@ class Game:
                 fill = ROW_DONE
             else:
                 fill = ROW_ON
-            screen.blit(translucent(rect.size, fill, None, S(8)), rect.topleft)
+            screen.blit(translucent_shared(rect.size, fill, None, S(8)), rect.topleft)
 
             label = self.font.render(
                 f"LEVEL {number}", True, (90, 96, 110) if locked else TEXT)
@@ -5403,7 +5830,7 @@ class Game:
 
     def draw_extras(self, screen):
         box = self.extras_rect()
-        screen.blit(translucent(box.size, PICKER_FILL, DIALOG_EDGE, S(16), solid=False),
+        screen.blit(translucent_shared(box.size, PICKER_FILL, DIALOG_EDGE, S(16)),
                     box.topleft)
         title = self.font_big.render("EXTRAS", True, TEXT)
         screen.blit(title, (box.x + S(26), box.y + S(24)))
@@ -5412,7 +5839,7 @@ class Game:
 
         for key, rect, label, blurb in self.extra_rows:
             on = self.extras.get(key, False)
-            screen.blit(translucent(rect.size,
+            screen.blit(translucent_shared(rect.size,
                                     ROW_ON if on else ROW_OFF,
                                     None, S(8)), rect.topleft)
             tick = pygame.Rect(rect.x + S(8), rect.centery - S(10), S(20), S(20))
@@ -5664,8 +6091,7 @@ class Game:
         pad = S(14)
         out = pygame.Surface((art.get_width() + pad * 2,
                               art.get_height() + pad * 2), pygame.SRCALPHA)
-        shadow = art.copy()
-        shadow.fill((0, 0, 0, 255), special_flags=pygame.BLEND_RGBA_MULT)
+        shadow = multiply_surface(art.copy(), (0, 0, 0, 255))
         for radius in (10, 6, 3):
             blur = pygame.transform.smoothscale(
                 shadow, (art.get_width() + radius * 2,
@@ -6770,9 +7196,14 @@ class Game:
         self.reset(mode)
         if grid is None:
             return False
-        self.score = int(entry.get("score", 0))
-        self.level = max(1, int(entry.get("level", 1)))
-        self.level_floor = int(entry.get("level_floor", 0))
+        # reset() has already dealt a fresh run, so anything unreadable here
+        # can be left at its default rather than bringing the game down.
+        try:
+            self.score = max(0, int(entry.get("score", 0)))
+            self.level = max(1, int(entry.get("level", 1)))
+            self.level_floor = max(0, int(entry.get("level_floor", 0)))
+        except (TypeError, ValueError):
+            return False
         if mode == TIMED:
             # a saved clock is worth keeping, but never below a few seconds
             saved = entry.get("time_left")
@@ -6792,7 +7223,7 @@ class Game:
 
     def draw_wiped(self, screen):
         box = pygame.Rect(WIDTH // 2 - S(230), HEIGHT // 2 - S(120), S(460), S(240))
-        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
+        screen.blit(translucent_shared(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
                     box.topleft)
         lines = [(self.font_big, "DATA RESET", (255, 255, 255)),  # White instead of GOLD
                  (self.font_small, "ALL SAVES AND SETTINGS DELETED", DIM)]
@@ -8086,11 +8517,10 @@ class Game:
             return grey
         current = max(1.0, total / seen)
 
-        # 62..196 out of 255. Tighter than the full range on purpose: below
-        # ~60 the outline swallows the face and two dark gems stop being
-        # separable, and above ~200 the highlights clip to white and do the
-        # same at the bright end.
-        lo, hi = 62.0, 196.0
+        # 50..210 out of 255. Expanded range to improve gem separation.
+        # Below ~50 dark gems blend together; above ~220 bright gems clip to white.
+        # This 160-point spread gives better visual distinction between the 6 types.
+        lo, hi = 50.0, 210.0
         target = lo if count == 1 else lo + (hi - lo) * (kind / (count - 1))
         if target <= current:
             # Darkening: scale the channels, which keeps the internal shading
@@ -8213,17 +8643,26 @@ class Game:
         hot = fuse <= 2
         pulse = 0.5 + 0.5 * math.sin(self.time * (7.0 if hot else 3.0))
         if hot:
-            ring = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
-            pygame.draw.rect(ring, (255, 90, 70, int(90 + 110 * pulse)),
-                             (2, 2, TILE - S(4), TILE - S(4)), S(3), border_radius=S(10))
-            screen.blit(ring, (int(x), int(y)))
-        label = self.font_big.render(str(fuse), True, (255, 255, 255))
-        pad = S(5)
-        w = label.get_width() + pad * 2
-        h = label.get_height() + S(2)
-        chip = translucent((w, h), (200, 60, 50, 235) if hot
-                           else (30, 34, 48, 225), None, h // 2)
-        chip.blit(label, (pad, 1))
+            ring = outline_ring((TILE - S(4), TILE - S(4)),
+                                (255, 90, 70, int(90 + 110 * pulse)),
+                                S(3), S(10))
+            screen.blit(ring, (int(x) + 2, int(y) + 2))
+        # The chip only depends on the digit and whether the fuse is hot, so it
+        # is baked once per pair instead of per bomb per frame.
+        key = (fuse, hot)
+        chip = self._fuse_chips.get(key)
+        if chip is None:
+            label = render_text(self.font_big, str(fuse), (255, 255, 255))
+            pad = S(5)
+            w = label.get_width() + pad * 2
+            h = label.get_height() + S(2)
+            chip = translucent((w, h), (200, 60, 50, 235) if hot
+                               else (30, 34, 48, 225), None, h // 2)
+            chip.blit(label, (pad, 1))
+            if len(self._fuse_chips) > 64:
+                self._fuse_chips.clear()
+            self._fuse_chips[key] = chip
+        w, h = chip.get_size()
         screen.blit(chip, (int(x + (TILE - w) / 2), int(y + TILE - h - S(4))))
 
     def draw_behind(self, screen, gem, x, y):
@@ -8236,6 +8675,11 @@ class Game:
             t = self.time * 2.0 + (cx * 0.021 + cy * 0.017)
             pulse = 0.5 + 0.5 * math.sin(t)
             swell = 0.94 + 0.09 * pulse + 0.03 * math.sin(t * 2.3)
+            # Left exact. rotozoom's output size is a step function of the
+            # scale, so quantising the swell to cache it - even at 1/2048 -
+            # sometimes lands the other side of a step and draws the glow a
+            # pixel bigger or smaller. Verified: no quantisation is both
+            # cache-friendly and pixel-exact, so this one pays full price.
             image = pygame.transform.rotozoom(halo, 0, swell)
             image.set_alpha(74 + int(66 * pulse))
             screen.blit(image, image.get_rect(center=(cx, cy)),
@@ -8243,6 +8687,10 @@ class Game:
 
         elif gem.power == HYPER:
             pulse = 0.5 + 0.5 * math.sin(self.time * 3.2)
+            # Left exact on purpose. Quantising the angle would turn a smooth
+            # spin into a visible step, and caching angle x swell pairs for a
+            # glow this size runs to hundreds of megabytes. A board only ever
+            # holds a gem or two of these, so it is not worth the risk.
             image = pygame.transform.rotozoom(
                 self.hyper_glow, (self.time * 26) % 360, 0.94 + 0.10 * pulse)
             image.set_alpha(150 + int(90 * pulse))
@@ -8267,12 +8715,20 @@ class Game:
             return                      # resting between sweeps
         index = min(len(frames) - 1, int(sweep * len(frames)))
         frame = frames[index]
-        # fade in and out so the streak does not pop at either end
-        edge = math.sin(sweep * math.pi)
-        frame = frame.copy()
-        frame.fill((255, 255, 255, int(235 * edge)),
-                   special_flags=pygame.BLEND_RGBA_MULT)
-        screen.blit(frame, (int(x), int(y)),
+        # fade in and out so the streak does not pop at either end. Additive
+        # blending ignores per-blit alpha, so this has to stay a real pixel
+        # multiply - but the result only depends on the frame and a quantised
+        # edge value, so it is memoised rather than rebuilt per gem per frame.
+        edge = int(235 * math.sin(sweep * math.pi))
+        edge = 0 if edge < 0 else (255 if edge > 255 else edge)
+        key = (frame, edge >> 2)
+        faded = _GLINT_CACHE.get(key)
+        if faded is None:
+            faded = fade_mult(frame.copy(), (edge >> 2) << 2)
+            if len(_GLINT_CACHE) > 400:
+                _GLINT_CACHE.clear()
+            _GLINT_CACHE[key] = faded
+        screen.blit(faded, (int(x), int(y)),
                     special_flags=pygame.BLEND_RGBA_ADD)
 
     def selection_pulse(self):
@@ -8357,29 +8813,40 @@ class Game:
 
     def draw_bonus_tag(self, screen, x, y):
         """Green +3s badge, pinned to the bottom of a bonus gem."""
+        # Everything here is a function of the pulse alone, so the whole badge
+        # is baked per pulse step and reused - it was rebuilding a text render,
+        # a rounded chip and an outlined ring for every bonus gem every frame.
         pulse = 0.5 + 0.5 * math.sin(self.time * 4.5)
-        label = self.font_small.render(f"+{int(BONUS_SECONDS)}s", True,
-                                       (18, 32, 24))
-        pad = S(5)
-        w = label.get_width() + pad * 2
-        h = label.get_height() + S(2)
-        chip = translucent((w, h), (126, 240, 168, 200 + int(55 * pulse)),
-                           None, h // 2)
-        chip.blit(label, (pad, 1))
+        # Keyed on the exact alpha, not a quantised pulse: 200 + int(55 * pulse)
+        # only ever takes 56 values, so the cache is small and the output is
+        # identical to rebuilding it every frame.
+        shade = 200 + int(55 * pulse)
+        chip = self._bonus_chips.get(shade)
+        if chip is None:
+            label = render_text(self.font_small, f"+{int(BONUS_SECONDS)}s",
+                                (18, 32, 24))
+            pad = S(5)
+            w = label.get_width() + pad * 2
+            h = label.get_height() + S(2)
+            chip = translucent((w, h), (126, 240, 168, shade), None, h // 2)
+            chip.blit(label, (pad, 1))
+            if len(self._bonus_chips) > 96:
+                self._bonus_chips.clear()
+            self._bonus_chips[shade] = chip
+        w, h = chip.get_size()
         screen.blit(chip, (int(x + (TILE - w) / 2), int(y + TILE - h - S(3))))
 
-        ring = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
-        pygame.draw.rect(ring, (126, 240, 168, int(70 + 60 * pulse)),
-                         (2, 2, TILE - S(4), TILE - S(4)), S(2), border_radius=S(10))
-        screen.blit(ring, (int(x), int(y)))
+        ring = outline_ring((TILE - S(4), TILE - S(4)),
+                            (126, 240, 168, int(70 + 60 * pulse)), S(2), S(10))
+        screen.blit(ring, (int(x) + 2, int(y) + 2))
 
     @staticmethod
     def bar(screen, x, y, w, h, frac, color):
-        screen.blit(translucent((w, h), TRACK, None, h // 2), (x, y))
+        screen.blit(translucent_shared((w, h), TRACK, None, h // 2), (x, y))
         filled = int(w * clamp01(frac))
         if filled >= h:
-            screen.blit(translucent((filled, h), color + (240,), None, h // 2),
-                        (x, y))
+            screen.blit(translucent_shared((filled, h), color + (240,), None,
+                                           h // 2), (x, y))
 
     def draw_panel(self, screen):
         screen.blit(self.panel_bg, (PANEL_X, PANEL_Y))
@@ -8488,7 +8955,7 @@ class Game:
                 font = button.fit(self.font, button.label, button.rect.width - S(14))
                 rect = button.rect
                 # Always use normal button state (not hover)
-                screen.blit(translucent(rect.size, BTN, PANEL_EDGE, S(10)), rect.topleft)
+                screen.blit(translucent_shared(rect.size, BTN, PANEL_EDGE, S(10)), rect.topleft)
                 if button.accent:
                     # Grey out the accent bar
                     pygame.draw.rect(screen, (80, 80, 80),
@@ -8510,12 +8977,18 @@ class Game:
         number still overflowed. Whatever the font, the rendered image is
         squeezed to the width as a backstop.
         """
-        font = Button.fit(self.font_score, text, width)
-        image = font.render(text, True, colour)
-        if image.get_width() > width:
-            scale = width / image.get_width()
-            image = pygame.transform.smoothscale(
-                image, (width, max(1, int(image.get_height() * scale))))
+        key = (text, colour, width)
+        image = self._readouts.get(key)
+        if image is None:
+            font = Button.fit(self.font_score, text, width)
+            image = render_text(font, text, colour)
+            if image.get_width() > width:
+                scale = width / image.get_width()
+                image = pygame.transform.smoothscale(
+                    image, (width, max(1, int(image.get_height() * scale))))
+            if len(self._readouts) > 300:
+                self._readouts.clear()
+            self._readouts[key] = image
         # Sit shorter numbers on the same baseline as the full-size ones, so
         # the readout does not hop about as the score grows.
         drop = self.font_score.get_height() - image.get_height()
@@ -8560,10 +9033,10 @@ class Game:
             have, need = self.score, goal["target"]
         frac = clamp01(have / max(1, need))
         bar = pygame.Rect(x, y, width, S(6))
-        screen.blit(translucent(bar.size, TRACK, None, S(3)),
+        screen.blit(translucent_shared(bar.size, TRACK, None, S(3)),
                     bar.topleft)
         if frac > 0:
-            screen.blit(translucent((max(S(3), int(width * frac)), bar.height),
+            screen.blit(translucent_shared((max(S(3), int(width * frac)), bar.height),
                                     GOLD + (235,), None, S(3)), bar.topleft)
         y += bar.height + S(6)
 
@@ -8656,7 +9129,7 @@ class Game:
             return
         # Always use darkened tiles - no opaque blocks
         shade = (14, 16, 26, 200)
-        tile = translucent((TILE, TILE), shade, None, S(0))
+        tile = translucent_shared((TILE, TILE), shade, None, S(0))
         for r in range(ROWS):
             for c in range(COLS):
                 cell = self.grid[r][c]
@@ -8668,12 +9141,11 @@ class Game:
             return
         pulse = 0.5 + 0.5 * math.sin(self.time * 7.0)
         alpha = int(200 * min(1.0, self.hint_left / 0.6))
+        inner = (TILE - S(4), TILE - S(4))
+        ring = outline_ring(inner, HINT_COLOR + (alpha,),
+                            int(2 + 2 * pulse), 10)
         for r, c in self.hint:
-            ring = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
-            pygame.draw.rect(ring, HINT_COLOR + (alpha,),
-                             (2, 2, TILE - S(4), TILE - S(4)),
-                             int(2 + 2 * pulse), border_radius=10)
-            screen.blit(ring, (BOARD_X + c * TILE, BOARD_Y + r * TILE))
+            screen.blit(ring, (BOARD_X + c * TILE + 2, BOARD_Y + r * TILE + 2))
 
     def draw_go(self, screen):
         """Short GO! over the board as the gems finish landing.
@@ -8705,7 +9177,8 @@ class Game:
         # The halo is the image's own shape blown up slightly, NOT a filled
         # rectangle - filling the bounding box is what produced a white block.
         halo = resize(image, (int(size[0] * 1.16), int(size[1] * 1.16)))
-        halo.fill((90, 96, 110, 0), special_flags=pygame.BLEND_RGBA_ADD)
+        halo.blit(mult_mask(halo.get_size(), (90, 96, 110, 0)), (0, 0),
+                  special_flags=pygame.BLEND_RGBA_ADD)
         halo.set_alpha(alpha // 3)
         screen.blit(halo, halo.get_rect(center=center))
 
@@ -8715,7 +9188,7 @@ class Game:
     def draw_over(self, screen):
 
         box = self.over_rect()
-        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
+        screen.blit(translucent_shared(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
                     box.topleft)
 
         if self.mode == CAMPAIGN and self.goal is not None:
@@ -8767,7 +9240,7 @@ class Game:
 
     def draw_music(self, screen):
         box = self.music_rect()
-        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
+        screen.blit(translucent_shared(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
                     box.topleft)
         title = self.font_big.render(self.music_title(), True,
                                      (255, 255, 255) if self.music_secret else TEXT)  # White instead of GOLD
@@ -8793,7 +9266,7 @@ class Game:
 
     def draw_background_picker(self, screen):
         box = self.music_rect()
-        screen.blit(translucent(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
+        screen.blit(translucent_shared(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
                     box.topleft)
         title = self.font_big.render("BACKGROUNDS", True, TEXT)
         screen.blit(title, (box.x + S(24), box.y + S(24)))
@@ -8838,7 +9311,7 @@ class Game:
         for key, rect, label, blurb in self.setting_rows:
             on = self.settings.get(key, True)
             gated = MAC_WINDOWED_ONLY and key in MAC_UNSUPPORTED + MAC_FORCED_ON
-            screen.blit(translucent(rect.size,
+            screen.blit(translucent_shared(rect.size,
                                     ROW_ON if on else ROW_OFF,
                                     None, S(8)), rect.topleft)
             tick = pygame.Rect(rect.x + S(8), rect.centery - S(9), S(18), S(18))
@@ -8888,7 +9361,8 @@ class Game:
         pygame.draw.circle(ring, (255, 255, 255, int(170 * (1 - p))),
                            center, int(p * WIDTH * 0.85), S(10))
         screen.blit(ring, (0, 0))
-        banner = self.font_huge.render(f"LEVEL {self.level}", True, (255, 255, 255))
+        banner = self.font_huge.render(f"LEVEL {self.level}", True,
+                                       (255, 255, 255)).copy()
         banner.set_alpha(int(255 * (1 - abs(self.t * 2 - 1))))
         screen.blit(banner, (WIDTH // 2 - banner.get_width() // 2,
                              center[1] - banner.get_height() // 2))
@@ -8904,6 +9378,16 @@ class Game:
         # keyed by id() - the old surfaces are about to be freed and their
         # addresses reused, so anything cached from them is now a wrong image
         self._desat = {}
+        # Same reasoning for the module-level surface memos: every entry keys off
+        # a sprite that is about to be replaced, and on macOS the old converted
+        # surfaces render black.
+        clear_render_caches()
+        _PUFF_ROT_CACHE.clear()
+        _FLYER_CROP_CACHE.clear()
+        _FLYER_ROT_CACHE.clear()
+        self._bonus_chips = {}
+        self._fuse_chips = {}
+        self._readouts = {}
         self.mono_normal = [self.mono_shade(s, i, len(self.normal))
                             for i, s in enumerate(self.normal)]
         self.mono_flame = [self.mono_shade(s, i, len(self.flame))
@@ -8996,15 +9480,20 @@ class Game:
 
         if under:
             if self.settings.get("particles", True):
-                layer = pygame.Surface((dw, dh), pygame.SRCALPHA)
-                span = max(dw, dh)
+                # Baked dot sprites blitted straight onto the target. The old
+                # version allocated a full-display SRCALPHA layer every frame,
+                # drew 46 two-pixel circles into it and blended the whole thing
+                # over the frame - about 1ms at 1080p to draw a few hundred
+                # pixels. Same picture, ~3% of the cost.
+                fx, fy = dw / WIDTH, dh / HEIGHT
+                blend = pygame.BLEND_RGBA_ADD
                 for mx, my, size, _, alpha in self.motes:
                     # motes live in a 0..1 space so they cover any window
-                    pygame.draw.circle(
-                        layer, (170, 190, 255, int(alpha * 34)),
-                        (int(mx / WIDTH * dw), int(my / HEIGHT * dh)),
-                        max(1, int(size * scale)))
-                surface.blit(layer, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+                    dot = dot_sprite(max(1, int(size * scale)),
+                                     (170, 190, 255, int(alpha * 34)))
+                    span = dot.get_width() >> 1
+                    surface.blit(dot, (int(mx * fx) - span, int(my * fy) - span),
+                                 special_flags=blend)
             # The transition art that belongs behind the 4:3 UI layer.
             # The board-level banner still goes here, but flying gems should
             # appear over the board and side panel instead.
@@ -9013,9 +9502,10 @@ class Game:
 
             alpha = self.overlay_veil() if veil else 0
             if alpha:
-                shade = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
-                shade.fill((7, 8, 16, alpha))
-                surface.blit(shade, (0, 0))
+                # Cached rather than allocated and filled every frame; at 1080p
+                # that alone was ~1.3ms of the ~3.3ms this cost.
+                surface.blit(mult_mask(surface.get_size(), (7, 8, 16, alpha)),
+                             (0, 0))
             return
 
         # debris still flies over the board, but not over an open menu
@@ -9178,10 +9668,13 @@ class Game:
 
         if self.sel is not None:
             r, c = self.sel
-            grow = int(3 * (0.5 + 0.5 * math.sin(self.time * 6.0)))
+            # The outline breathes so the held gem reads as picked up rather
+            # than just framed. Quantised to whole pixels, so it steps rather
+            # than shimmering, and scaled like every other authored size.
+            grow = S(3) * (0.5 + 0.5 * math.sin(self.time * 6.0))
             pygame.draw.rect(screen, (255, 255, 255),
-                             (BOARD_X + c * TILE, BOARD_Y + r * TILE, TILE, TILE), S(3),
-                             border_radius=6)
+                             (BOARD_X + c * TILE, BOARD_Y + r * TILE, TILE, TILE),
+                             S(2) + int(grow), border_radius=S(6))
 
         clip = screen.get_clip()
         screen.set_clip(pygame.Rect(BOARD_X, BOARD_Y, COLS * TILE, ROWS * TILE))
@@ -9218,8 +9711,11 @@ class Game:
                 if abs(scale - 1.0) > 0.001:
                     if scale <= 0.02:
                         continue
+                    # Memoised: a cascade rescales the same few sprites through
+                    # the same integer sizes every frame, and the scale is the
+                    # expensive half.
                     s = max(1, int(TILE * scale))
-                    sprite = pygame.transform.smoothscale(sprite, (s, s))
+                    sprite = scaled_cached(sprite, (s, s))
                     x += (TILE - s) / 2
                     y += (TILE - s) / 2
                 screen.blit(sprite, (int(x), int(y)))
@@ -9280,7 +9776,9 @@ class Game:
         alpha = self.overlay_veil()
         if alpha:
             k = max(0, 255 - alpha)
-            screen.fill((k, k, k, 255), special_flags=pygame.BLEND_RGBA_MULT)
+            # See multiply_surface(): a blended fill over the whole layer is
+            # ~25x the cost of the equivalent blit, for identical output.
+            multiply_surface(screen, (k, k, k, 255))
 
         # The secret level tears the whole picture apart. This sits after the
         # board and panel but BEFORE the menus below, so the pause menu stays
@@ -9385,6 +9883,7 @@ class Display:
         # renders those surfaces black once the mode changes. Drop it here so
         # reload_assets() below decodes fresh copies.
         clear_campaign_bg_cache()
+        clear_render_caches()
         # The answer depends on the format of the surface we just created, so
         # it has to be worked out again here rather than once at startup.
         self.verify_compositing()
@@ -9602,9 +10101,9 @@ class Display:
         Only used on the direct path - when verify_compositing() has confirmed
         that this build keeps the layer's alpha through the scale.
         """
-        if self._scaled is None or self._scaled.get_size() != size:
+        fresh = self._scaled is None or self._scaled.get_size() != size
+        if fresh:
             self._scaled = pygame.Surface(size, pygame.SRCALPHA)
-        self._scaled.fill((0, 0, 0, 0))
 
         lw, lh = self.layer.get_size()
         fx, fy = size[0] / lw, size[1] / lh
@@ -9612,15 +10111,21 @@ class Display:
         # it is correct - every source pixel becomes a clean square block, and
         # smoothing would only soften edges that need no softening.
         if abs(fx - round(fx)) < 0.002 and abs(fy - round(fy)) < 0.002:
+            self._scaled.fill((0, 0, 0, 0))
             self._scaled.blit(pygame.transform.scale(self.layer, size), (0, 0))
             return self._scaled
 
         if self.scaler == "smooth_dest":
+            # smoothscale writes every pixel of the destination, so the
+            # transparent clear above was redundant work on a full-screen
+            # surface - it is only needed on the paths that blit into it.
             pygame.transform.smoothscale(self.layer, size, self._scaled)
         elif self.scaler == "smooth":
+            self._scaled.fill((0, 0, 0, 0))
             self._scaled.blit(pygame.transform.smoothscale(self.layer, size),
                               (0, 0))
         else:
+            self._scaled.fill((0, 0, 0, 0))
             self._scaled.blit(pygame.transform.scale(self.layer, size), (0, 0))
         return self._scaled
 
@@ -9666,6 +10171,7 @@ class Display:
         self._base_key = None
         self._cover_cache.clear()
         clear_campaign_bg_cache()   # area art is built to the old layer size
+        clear_render_caches()       # every baked size is now wrong
         self.verify_compositing()
 
     def to_game(self, pos):
@@ -9705,11 +10211,15 @@ class Display:
         pos = ((dw - art.get_width()) // 2,
                (dh - art.get_height()) // 2 + int(dh * rise))
         if alpha >= 255:
+            art.set_alpha(None)
             self.surface.blit(art, pos)
         else:
-            faded = art.copy()
-            faded.set_alpha(alpha)
-            self.surface.blit(faded, pos)
+            # set_alpha on the cached copy rather than duplicating a
+            # full-screen photo every frame of the crossfade. The alpha is
+            # per-blit state, and this is the only reader.
+            art.set_alpha(alpha)
+            self.surface.blit(art, pos)
+            art.set_alpha(None)
 
     def present(self, game):
         if game.doom:
@@ -9789,8 +10299,14 @@ class Display:
             else:
                 size = (max(1, int(WIDTH * self.scale)),
                         max(1, int(HEIGHT * self.scale)))
-                self.surface.blit(
-                    pygame.transform.smoothscale(flat, size), self.offset)
+                # Scale into a surface kept between frames rather than letting
+                # smoothscale allocate a fresh one every time. This is the single
+                # most expensive call in the frame, so the allocation is worth
+                # removing even though the resample itself dominates.
+                if self._pre is None or self._pre.get_size() != size:
+                    self._pre = pygame.Surface(size)
+                pygame.transform.smoothscale(flat, size, self._pre)
+                self.surface.blit(self._pre, self.offset)
         elif self.direct():
             # 1:1, no scaling in between - the layer goes straight over the
             # backdrop and its alpha is never touched.
@@ -10054,8 +10570,12 @@ def main():
 
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
-                pygame.quit()
-                sys.exit()
+                # Cmd+Q and the red close button come through here. Going
+                # straight to sys.exit() threw away the in-progress run, so
+                # this takes the same path as the in-game QUIT button: save
+                # first, then let the wants_quit check below do the exit.
+                game.quit()
+                break
             elif game.doom:
                 # Nothing responds. The only way out is the window close
                 # above, or waiting for it to go.
