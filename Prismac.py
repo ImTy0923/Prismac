@@ -1153,8 +1153,8 @@ AUDIO_EXTS = (".ogg", ".wav", ".mp3", ".flac")
 # music/Timed Music/ played instead while timed mode is running
 TIMED_MUSIC_SUBDIR = "Timed Music"
 
-MUSIC_VOLUME = 0.35        # starting music level, 0.0 - 1.0
-SFX_START_VOLUME = 0.8     # starting sound-effect level, 0.0 - 1.0
+MUSIC_VOLUME = 1.0         # starting music level, 0.0 - 1.0
+SFX_START_VOLUME = 1.0     # starting sound-effect level, 0.0 - 1.0
 VOLUME_STEP = 0.05         # how much the - and = keys move the slider
 BASE_VOL_WIDTH = 150
 VOL_HEIGHT = 6

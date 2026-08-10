@@ -39,8 +39,10 @@ ditto -c -k --keepParent "dist/Prismac.app" "Prismac-mac.zip"\
 \
 xattr -cr "/Users/tybo/Documents/Prismac/Prismac/dist/Prismac.app"\
 \
-codesign --force --deep --sign - "/Users/tybo/Documents/Prismac/Prismac/dist/Prismac.app"\
-\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 codesign --force --deep --sign - "/Users/tybo/Documents/Prismac/Prismac/dist/Prismac.app"\
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+\cf0 \
 codesign --verify --deep --strict --verbose=2 "/Users/tybo/Documents/Prismac/Prismac/dist/Prismac.app"\
 \
 ditto -c -k --sequesterRsrc --keepParent \\\
