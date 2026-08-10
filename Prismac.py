@@ -210,7 +210,6 @@ LEVEL_GROWTH = 1.0435
 ENDLESS, TIMED, TITLE = "endless", "timed", "title"
 TIMED_MUSIC_MODE = "timedmusic"   # an Extras run that is on the clock
 CREDITS_MODE = "credits"          # the credits roll has its own track
-SECRET_MUSIC_MODE = "secret"      # the hidden playlist, found from the picker
 SHAPES, EXTRAS, CHAOS = "shapes", "extras", "chaos"
 CAMPAIGN = "campaign"
 CAMPAIGN_MUSIC_MODE = "campaignmusic"   # the current area's own tracks
@@ -713,6 +712,11 @@ SETTING_DEFS = (
 
 PARTICLE_COUNT = 46
 
+# A single shared empty set, so hot loops can fall back to "nothing here"
+# without allocating a fresh set on every frame. Frozen: nothing may write to
+# it by accident.
+EMPTY_SET = frozenset()
+
 # rainbow gem detonation: a short charge, then the targets zapped one by one
 RAINBOW_CHARGE = 0.55      # hypercube shaking before anything pops
 RAINBOW_STEP = 0.055       # gap between each gem being taken out
@@ -1031,6 +1035,8 @@ CREDITS_TEXT = (
     ("h", "SOUND EFFECTS"), ("r", ""),
     ("", "UNIVERSAL UI / MENU SOUNDPACK"), ("b", "CYREX STUDIOS"),
     ("", "TRIPLE TREAT"),
+    ("", "GEMS_SFX"),
+    ("", "ELECTRIC MAGIC SPELLS"), ("b", "INDIEKIT"),
     ("", "SOUND EFFECTS FOR MATCH-3 GAMES"), ("b", "SABLE BLOOM"),
     ("s", ""), ("s", ""),
 
@@ -1146,8 +1152,6 @@ AUDIO_EXTS = (".ogg", ".wav", ".mp3", ".flac")
 # music/            the endless-mode playlist, shuffled
 # music/Timed Music/ played instead while timed mode is running
 TIMED_MUSIC_SUBDIR = "Timed Music"
-SECRET_MUSIC_SUBDIR = "secret"
-SECRET_TAPS = 5            # taps on the picker title to reveal it
 
 MUSIC_VOLUME = 0.35        # starting music level, 0.0 - 1.0
 SFX_START_VOLUME = 0.8     # starting sound-effect level, 0.0 - 1.0
@@ -3578,7 +3582,6 @@ class Audio:
         self.timed_playlist = []
         self.title_playlist = []
         self.credits_playlist = []
-        self.secret_playlist = []
         self.campaign_playlist = []
         self.mode = ENDLESS
         self.playlist_started = False
@@ -3696,19 +3699,12 @@ class Audio:
         self.timed_playlist = [timed_index[key] for key in sorted(timed_index)]
         random.shuffle(self.timed_playlist)
 
-        # music/secret/ - only ever reached through the picker easter egg, so
-        # it is kept in filename order rather than shuffled.
-        secret_dir = os.path.join(MUSIC_DIR, SECRET_MUSIC_SUBDIR)
-        secret_index = self.index_folder(secret_dir)
-        self.secret_playlist = [secret_index[key] for key in sorted(secret_index)]
-
         if not self.playlist:
             self.missing.append("music (nothing in music/)")
         if not self.title_playlist:
             self.missing.append("title music (nothing in title/)")
         if not self.timed_playlist:
             self.missing.append(f"timed music (nothing in {TIMED_MUSIC_SUBDIR}/)")
-        # secret/ is optional and silent about being empty - that is the point
         if not self.playlist and not self.timed_playlist:
             return
 
@@ -3731,8 +3727,6 @@ class Audio:
     def active_list(self):
         """Falls back to the main playlist if a set is empty, so the game
         never goes silent."""
-        if self.mode == SECRET_MUSIC_MODE and self.secret_playlist:
-            return self.secret_playlist
         if self.mode == CAMPAIGN_MUSIC_MODE and self.campaign_playlist:
             return self.campaign_playlist
         if self.mode == CREDITS_MODE and self.credits_playlist:
@@ -3862,12 +3856,11 @@ class Audio:
         a.timed_playlist = []
         a.title_playlist = []
         a.credits_playlist = []
-        # These two were absent, so active_list() raised AttributeError on the
-        # silent placeholder the moment anything asked for the campaign or
-        # secret playlist - reachable if an area loads before the real Audio
-        # has replaced it.
+        # This was absent, so active_list() raised AttributeError on the
+        # silent placeholder the moment anything asked for the campaign
+        # playlist - reachable if an area loads before the real Audio has
+        # replaced it.
         a.campaign_playlist = []
-        a.secret_playlist = []
         a.mode = ENDLESS
         a.playlist_started = False
         a.chosen = None
@@ -5886,9 +5879,7 @@ class Game:
         self.level_floor = 0          # score at which the current level began
         self.menu_open = False
         self.music_open = False
-        self.music_secret = False   # picker showing the hidden folder
         self.music_picker_mode = "normal"  # "normal" or "timed" playlist
-        self.music_title_taps = 0   # taps on the picker title
         self.dragging = None
         self.wants_quit = False
         self.hint = None
@@ -5903,6 +5894,7 @@ class Game:
         self.spent_bombs = set()
         self.rainbow_targets = []
         self.rainbow_all = set()
+        self.rainbow_zapped = set()
         self.rainbow_bolts = []
         self.rainbow_origin = None
         self.rainbow_done = 0
@@ -6233,6 +6225,10 @@ class Game:
         else:
             self.shown_progress += step * min(1.0, dt * 6.0)
 
+        # Concatenation looks wasteful here, but it measured FASTER than
+        # itertools.chain at these list sizes: the join is one memcpy and
+        # iterating a plain list is the quickest path CPython has, whereas
+        # chain pays generator overhead on every single button. Left as is.
         for button in (self.panel_buttons() + self.menu_buttons
                        + self.title_buttons + self.finish_buttons()
                        + self.extra_buttons + self.over_buttons
@@ -6790,19 +6786,6 @@ class Game:
     def music_rect():
         return pygame.Rect(WIDTH // 2 - S(230), HEIGHT // 2 - S(220), S(460), S(440))
 
-    def music_title_rect(self):
-        """Hitbox for the picker's heading. Derived from the rendered text so
-        it stays honest at every render scale, and padded so it is tappable
-        rather than pixel-perfect."""
-        box = self.music_rect()
-        image = self.font_big.render(self.music_title(), True, TEXT)
-        return pygame.Rect(box.x + S(24), box.y + S(24),
-                           image.get_width() + S(12),
-                           image.get_height() + S(8))
-
-    def music_title(self):
-        return "Secret ;)" if self.music_secret else "MUSIC"
-
     @staticmethod
     def duration_picker_rect():
         return pygame.Rect(WIDTH // 2 - S(230), HEIGHT // 2 - S(170), S(460), S(280))
@@ -6875,52 +6858,12 @@ class Game:
         self.menu_open = False
         self.sel = None
         self.dragging = None
-        self.music_title_taps = 0
-        self.music_secret = self.audio.mode == SECRET_MUSIC_MODE
         self.music_picker_mode = "normal"  # Reset to normal when opening
         self.music_list.items = self.audio.track_names()
         playing = self.audio.now_playing()
         self.music_list.current = (self.music_list.items.index(playing)
                                    if playing in self.music_list.items else -1)
         self.music_list.offset = 0.0
-
-    def tap_music_title(self):
-        """Five taps on the picker heading open the hidden folder.
-
-        Counted per visit: the tally resets whenever the picker opens, so a
-        stray click days ago cannot leave it one tap from firing.
-        """
-        self.music_title_taps += 1
-        if self.music_title_taps < SECRET_TAPS:
-            self.audio.play("menuclick")
-            return
-        self.music_title_taps = 0
-        self.toggle_secret_music()
-
-    def toggle_secret_music(self):
-        if not self.music_secret:
-            if not self.audio.secret_playlist:
-                # Nothing to show. Say so plainly rather than opening an
-                # empty list that looks broken.
-                self.audio.play("menuclick")
-                self.note = f"nothing in music/{SECRET_MUSIC_SUBDIR}"
-                return
-            self.music_secret = True
-            self.audio.use_playlist(SECRET_MUSIC_MODE)
-        else:
-            self.music_secret = False
-            self.audio.use_playlist(self.current_music_mode())
-        self.audio.play("levelup")
-        self.refresh_music_list()
-        self.note = "secret playlist" if self.music_secret else "back to music"
-
-    def current_music_mode(self):
-        """Whichever playlist this part of the game would normally use."""
-        if self.on_title:
-            return TITLE
-        if self.mode == EXTRAS and self.timed:
-            return TIMED_MUSIC_MODE
-        return self.mode
 
     def refresh_music_list(self):
         self.music_list.items = self.audio.track_names()
@@ -6930,13 +6873,7 @@ class Game:
         self.music_list.offset = 0.0
 
     def set_music_picker_mode(self, mode):
-        """Switch music picker between 'normal' (endless) and 'timed' playlists.
-        Does nothing if secret playlist is active."""
-        # Don't switch modes when in secret mode
-        if self.music_secret:
-            self.audio.play("menuclick")
-            return
-        
+        """Switch music picker between 'normal' (endless) and 'timed'."""
         self.music_picker_mode = mode
         # Temporarily switch the audio mode to get the right playlist
         old_mode = self.audio.mode
@@ -7698,26 +7635,19 @@ class Game:
                 self.close_menu()
             return
         if self.music_open:
-            if self.music_title_rect().collidepoint(pos):
-                self.tap_music_title()
-                return
             row = self.music_list.index_at(pos)
             if row >= 0:
                 self.audio.play("menuclick")
-                # In secret mode, don't switch modes - just play from secret playlist
-                if self.music_secret:
-                    name = self.audio.play_chosen(row)
+                # Temporarily set audio mode to get the right playlist
+                old_mode = self.audio.mode
+                old_track = self.audio.track
+                if self.music_picker_mode == "timed":
+                    self.audio.mode = TIMED_MUSIC_MODE
                 else:
-                    # Temporarily set audio mode to get the right playlist
-                    old_mode = self.audio.mode
-                    old_track = self.audio.track
-                    if self.music_picker_mode == "timed":
-                        self.audio.mode = TIMED_MUSIC_MODE
-                    else:
-                        self.audio.mode = ENDLESS
-                    name = self.audio.play_chosen(row)
-                    self.audio.mode = old_mode
-                    self.audio.track = old_track
+                    self.audio.mode = ENDLESS
+                name = self.audio.play_chosen(row)
+                self.audio.mode = old_mode
+                self.audio.track = old_track
                 self.music_list.current = row
             elif not self.music_rect().collidepoint(pos):
                 self.audio.play("menuclick")
@@ -7968,10 +7898,14 @@ class Game:
             self.hint_left = max(0.0, self.hint_left - dt)
             if self.hint_left == 0:
                 self.hint = None
-        for cell in list(self.pops):
-            self.pops[cell] -= dt
-            if self.pops[cell] <= 0:
-                del self.pops[cell]
+        # The copy is only needed because expired entries are deleted while
+        # iterating; skipping it entirely on an empty dict saves an allocation
+        # on the overwhelming majority of frames.
+        if self.pops:
+            for cell in list(self.pops):
+                self.pops[cell] -= dt
+                if self.pops[cell] <= 0:
+                    del self.pops[cell]
 
         if self.state == "idle":
             return
@@ -8059,6 +7993,9 @@ class Game:
         self.rainbow_done = 0
         self.rainbow_bolts = []
         self.rainbow_all = set(targets)
+        # The cells already zapped, kept as a set purely so the draw loop can
+        # ask "is this one gone yet?" in constant time - see draw_scene.
+        self.rainbow_zapped = set()
         step = min(RAINBOW_STEP,
                    max(0.02, (RAINBOW_MAX - RAINBOW_CHARGE) / max(1, len(ordered))))
         self.rainbow_step = step
@@ -8069,8 +8006,12 @@ class Game:
 
     def update_rainbow(self, dt):
         self.t += dt
-        self.rainbow_bolts = [b for b in self.rainbow_bolts if b[2] > 0]
-        self.rainbow_bolts = [(a, b, life - dt) for a, b, life in self.rainbow_bolts]
+        # Age and expire the bolts in one pass. This used to build the list
+        # twice - once to drop the dead ones, once to tick the survivors.
+        if self.rainbow_bolts:
+            self.rainbow_bolts = [(a, b, life - dt)
+                                  for a, b, life in self.rainbow_bolts
+                                  if life > 0]
 
         if self.t < RAINBOW_CHARGE:
             return
@@ -8079,6 +8020,7 @@ class Game:
         while self.rainbow_done < want:
             r, c = self.rainbow_targets[self.rainbow_done]
             self.rainbow_done += 1
+            self.rainbow_zapped.add((r, c))
             self.rainbow_bolts.append((self.rainbow_origin, (r, c), 0.16))
             # Check if this gem is a flame gem or bomb and spawn explosion
             # effects immediately when the rainbow zaps it.
@@ -8110,6 +8052,7 @@ class Game:
             targets = self.rainbow_all
             self.rainbow_all = set()
             self.rainbow_targets = []
+            self.rainbow_zapped = set()
             self.cascade = 1
             self.multi_run = False
             self.begin_clear(targets, {}, is_rainbow=True)
@@ -8212,22 +8155,39 @@ class Game:
                                  self.time_left + BONUS_SECONDS * gained)
             self.audio.play("bonus")
 
-    def begin_clear(self, cells, spawns, is_rainbow=False):
+    def begin_clear(self, cells, spawns, is_rainbow=False, is_blast=False):
+        """Start clearing `cells`.
+
+        is_rainbow marks a hypercube wipe and is_blast a bomb whose fuse ran
+        out. Both arrive here having already played their own voice, which is
+        why neither wants the match sound on top - see the audio block below.
+        """
         self.matched = cells
         self.spawns = spawns
         self.award_time(cells)
         # Add camera shake in spotlight mode - reveals more of the board
         if self.extra("spotlight"):
             self.add_shake(0.25)
+        # One pass does all three jobs that used to take three: find the live
+        # explosives, give every ordinary cell its match burst, and remember
+        # where a blast should be thrown from. A flame gem is preferred as the
+        # origin; a bomb reached by a chain stands in when there is no flame.
         explosive_cells = set()
+        flame_origin = None
+        bomb_origin = None
         for r, c in cells:
             gem = self.grid[r][c]
-            if gem is not None and (gem.power == FLAME or gem.cell_type == CELL_BOMB):
+            if gem is not None and gem.power == FLAME:
                 explosive_cells.add((r, c))
-        for r, c in cells:
-            if (r, c) in explosive_cells:
-                continue
-            self.spawn_effect("match", r, c)
+                if flame_origin is None:
+                    flame_origin = (r, c)
+            elif gem is not None and gem.cell_type == CELL_BOMB:
+                explosive_cells.add((r, c))
+                if bomb_origin is None:
+                    bomb_origin = (r, c)
+            else:
+                # an explosive gets the explosion, not the ordinary burst
+                self.spawn_effect("match", r, c)
         if not self.scoring:
             gained = 0
         elif self.extra("lock"):
@@ -8291,19 +8251,31 @@ class Game:
                 and self.goal is not None and self.campaign_done()):
             self.win_campaign()
 
-        # Only play match sound if no explosive gems were created
-        # If explosives were created, only play the gem creation sound instead
-        if not spawns:
+        # The match voice is the fallback for a plain clear, and only that.
+        # Anything louder already speaks for itself, and stacking the match
+        # sound on top of it just muddies the hit:
+        #   spawns          - a flame or hypercube being made (hypermade /
+        #                     flamemade, played just below)
+        #   is_rainbow      - a hypercube wipe, which has already played its
+        #                     charge and its run of zaps
+        #   is_blast        - a bomb that timed out; settle() played explode
+        #                     before handing the cells over
+        #   explosive_cells - the clear ran into a live flame gem or bomb, so
+        #                     explode plays for it below instead
+        blast_voice = bool(explosive_cells) and not is_rainbow and not is_blast
+        if not (spawns or is_rainbow or is_blast or blast_voice):
             self.audio.play_match(self.cascade, self.multi_run)
         for power in spawns.values():
             self.audio.play("hypermade" if power == HYPER else "flamemade")
-        flames = [rc for rc in cells
-                  if self.grid[rc[0]][rc[1]] is not None
-                  and self.grid[rc[0]][rc[1]].power == FLAME]
-        if flames and not is_rainbow:
+        if blast_voice:
+            # The blast is voiced once, here. On the is_blast path settle()
+            # has already shaken the camera, played explode and thrown the
+            # debris over this very same cell set - doing it again from a
+            # flame gem the bomb happened to catch stacked two explosions on
+            # one frame and doubled the particle count for nothing.
             self.add_shake(SHAKE_FLAME)
             self.audio.play("explode")
-            self.hurl_blast(cells, flames[0])
+            self.hurl_blast(cells, flame_origin or bomb_origin)
         # The board already says all this with its own effects and sounds, so
         # there is no shouted label for cascades, hypercubes or flame gems.
         # The note line is kept for things the player cannot otherwise see.
@@ -8444,7 +8416,9 @@ class Game:
                 self.spawn_smoke(r, c)
             if self.spent_bombs:
                 self.hurl_blast(blast, next(iter(self.spent_bombs)))
-            self.begin_clear(blast, {})
+            # is_blast: explode has already gone off just above, so the clear
+            # must not add the match sound behind it.
+            self.begin_clear(blast, {}, is_blast=True)
             return
         if (self.scoring and self.mode != CAMPAIGN
                 and self.level_progress() >= 1.0):
@@ -8595,13 +8569,18 @@ class Game:
         return out
 
     def sprite_for(self, gem):
-        if gem.cell_type == CELL_EMPTY:
-            return self.blank_tile
-        # rocks and bombs are not gems: they have their own artwork and are
-        # never recoloured by mono or drawn as a gem kind
-        if gem.cell_type == CELL_ROCK:
-            return self.chaos_art.get("rock") or self.fallback_block((150, 146, 138))
-        if gem.cell_type == CELL_BOMB:
+        # Ordinary gems are the overwhelming majority and this runs once per
+        # cell per frame, so the common case is settled in ONE comparison
+        # rather than falling through three cell_type tests first.
+        ct = gem.cell_type
+        if ct != CELL_GEM:
+            # rocks and bombs are not gems: they have their own artwork and
+            # are never recoloured by mono or drawn as a gem kind. There are
+            # only four cell types, so this branch is exhaustive.
+            if ct == CELL_EMPTY:
+                return self.blank_tile
+            if ct == CELL_ROCK:
+                return self.chaos_art.get("rock") or self.fallback_block((150, 146, 138))
             return self.chaos_art.get("bomb") or self.fallback_block((60, 60, 66))
         if gem.power == HYPER:
             sprite = self.hyper
@@ -9242,24 +9221,21 @@ class Game:
         box = self.music_rect()
         screen.blit(translucent_shared(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
                     box.topleft)
-        title = self.font_big.render(self.music_title(), True,
-                                     (255, 255, 255) if self.music_secret else TEXT)  # White instead of GOLD
+        title = self.font_big.render("MUSIC", True, TEXT)
         screen.blit(title, (box.x + S(24), box.y + S(24)))
         # SCROLL WHEEL hint removed
         self.music_list.draw(screen, self.font)
-        # Draw mode selector buttons only when not in secret mode
-        if not self.music_secret:
-            for i, button in enumerate(self.music_buttons):
-                # Skip the CLOSE button (index 2), only draw NORMAL and TIMED
-                if i < 2:
-                    # Highlight the active mode button (Normal or Timed)
-                    if i == 0 and self.music_picker_mode == "normal":
-                        button.hover = True
-                    elif i == 1 and self.music_picker_mode == "timed":
-                        button.hover = True
-                    else:
-                        button.hover = False
-                    button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
+        for i, button in enumerate(self.music_buttons):
+            # Skip the CLOSE button (index 2), only draw NORMAL and TIMED
+            if i < 2:
+                # Highlight the active mode button (Normal or Timed)
+                if i == 0 and self.music_picker_mode == "normal":
+                    button.hover = True
+                elif i == 1 and self.music_picker_mode == "timed":
+                    button.hover = True
+                else:
+                    button.hover = False
+                button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
         # Always draw the CLOSE button
         if len(self.music_buttons) > 2:
             self.music_buttons[2].draw(screen, self.font, self.hover_lift.get(id(self.music_buttons[2]), 0.0))
@@ -9678,14 +9654,16 @@ class Game:
 
         clip = screen.get_clip()
         screen.set_clip(pygame.Rect(BOARD_X, BOARD_Y, COLS * TILE, ROWS * TILE))
+        # Hoisted: this used to re-slice rainbow_targets and scan the slice
+        # once per cell per frame. Outside a wipe it is simply empty, so the
+        # membership test costs nothing.
+        zapped = self.rainbow_zapped if self.state == "rainbow" else EMPTY_SET
         for r in range(ROWS):
             for c in range(COLS):
                 gem = self.grid[r][c]
                 if gem is None or gem.cell_type == CELL_EMPTY:
                     continue          # a hole in a Shapes board: show nothing
-                if (self.state == "rainbow"
-                        and (r, c) in self.rainbow_all
-                        and (r, c) in self.rainbow_targets[:self.rainbow_done]):
+                if (r, c) in zapped:
                     continue          # already zapped
                 x, y, scale = self.gem_draw_info(r, c)
                 sprite = self.sprite_for(gem)
