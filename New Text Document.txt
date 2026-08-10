@@ -1,0 +1,24 @@
+
+
+
+
+cd /d "C:\Users\tyfuk\Downloads\Prismac-main\Prismac-main"
+
+python -m PyInstaller ^
+  --onefile ^
+  --windowed ^
+  --name="Prismac" ^
+  --icon="Game ICNS\Prismac-Win.ico" ^
+  --add-data "Game ICNS\Prismac-Win.png;Game ICNS" ^
+  --add-data "backgrounds;backgrounds" ^
+  --add-data "campaign;campaign" ^
+  --add-data "chaos;chaos" ^
+  --add-data "credits;credits" ^
+  --add-data "effects;effects" ^
+  --add-data "fonts;fonts" ^
+  --add-data "gems;gems" ^
+  --add-data "music;music" ^
+  --add-data "soundeffects;soundeffects" ^
+  --add-data "Title;Title" ^
+  --add-data "ui;ui" ^
+  Prismac.py
