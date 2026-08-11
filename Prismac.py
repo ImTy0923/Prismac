@@ -66,13 +66,11 @@ except ImportError:
 
 COLS, ROWS = 9, 9
 
-# --- render scale ---------------------------------------------------------
+# --- layout ---------------------------------------------------------------
 # The whole UI is authored at 1080x810 and every pixel number in the layout
-# and drawing code goes through S(). Raising RENDER_SCALE redraws the game
-# into a larger layer - gems, glyphs and panels are all genuinely rendered at
-# that size rather than blown up afterwards, which is the only thing that
-# actually adds detail. Display still fits the layer to the screen, so the
-# picture stays the same size and simply gets sharper.
+# and drawing code goes through S(), which is the identity at the one scale
+# the game ships at. It stays in place because several hundred call sites
+# read through it and because it keeps the authored numbers self-documenting.
 BASE_WIDTH, BASE_HEIGHT = 1080, 810
 BASE_TILE = 83
 BASE_MARGIN = 27
@@ -83,11 +81,7 @@ BASE_EXTRA_ROW = 52
 # Menu toggle rows are single-line, so they need much less height than the
 # two-line extras rows.
 SETTING_ROW = 38
-BASE_FONTS = {"huge": 7, "score": 5, "big": 3, "body": 2, "small": 2,
-              # The smallest the 5x7 face goes. Only the FPS readout
-              # uses it - anything longer than a couple of digits is
-              # too small to read at this size.
-              "tiny": 1}
+BASE_FONTS = {"huge": 7, "score": 5, "big": 3, "body": 2, "small": 2}
 
 RENDER_SCALE = 1.0
 
@@ -96,12 +90,11 @@ _S_MEMO = {}
 
 
 def S(n):
-    """Scale an authored 1080x810 pixel number to the current render scale.
+    """Scale an authored 1080x810 pixel number to the render scale.
 
     Memoised. S() is called several hundred times per frame from the draw
     code, and a dict hit is measurably cheaper than a float multiply plus
-    int() plus the two object allocations those make. apply_render_scale()
-    clears the memo, which is the only place RENDER_SCALE ever changes.
+    int() plus the two object allocations those make.
     """
     cached = _S_MEMO.get(n)
     if cached is None:
@@ -137,66 +130,28 @@ BOARD_X = PANEL_X + PANEL_W + S(26)
 BOARD_Y = (HEIGHT - BOARD_H) // 2
 
 
-def apply_render_scale(k):
-    """Recompute every scale-dependent module constant."""
-    global RENDER_SCALE, WIDTH, HEIGHT, TILE, MARGIN, GEM_PAD, PANEL_W
-    global PANEL_Y, EXTRA_ROW, FONT_SCALE, PANEL_X, PANEL_H
-    global BOARD_W, BOARD_H, BOARD_X, BOARD_Y
-    RENDER_SCALE = float(k)
-    # Every S() answer and every cached surface built from one is now stale.
-    _S_MEMO.clear()
-    clear_render_caches()
-    WIDTH, HEIGHT = S(BASE_WIDTH), S(BASE_HEIGHT)
-    TILE = S(BASE_TILE)
-    MARGIN = S(BASE_MARGIN)
-    GEM_PAD = max(1, S(BASE_GEM_PAD))
-    PANEL_W = S(BASE_PANEL_W)
-    PANEL_Y = S(BASE_PANEL_Y)
-    EXTRA_ROW = S(BASE_EXTRA_ROW)
-    FONT_SCALE = font_scale("big")
-    PANEL_X = MARGIN
-    PANEL_H = HEIGHT - PANEL_Y * 2
-    BOARD_W = BOARD_H = COLS * TILE
-    BOARD_X = PANEL_X + PANEL_W + S(26)
-    BOARD_Y = (HEIGHT - BOARD_H) // 2
-
-
-# Internal render resolution, offered in fullscreen. Higher settings render
-# more pixels for the same on-screen size, so the picture gets sharper rather
-# than bigger.
-# (factor, label)
-SCALE_OPTIONS = (
-    (1.00, "100%"),
-    (1.25, "125%"),
-    (1.50, "150%"),
-    (2.00, "200%"),
-)
-DEFAULT_RENDER_SCALE = 1.00
-
 HINT_SECONDS = 4.0          # how long a hint stays lit
+
+# Reshuffles a Shapes run gets before a dead board actually ends it.
+#
+# A silhouette is a much tighter board than the full 9x9: fewer straight
+# 3-cell slots, and the survivors left behind by each cascade are exactly the
+# gems that have repeatedly failed to match, so play drifts towards locked
+# positions far faster than a freshly-dealt board would suggest. Measured over
+# every mask, ending on the first dead board killed runs after as little as
+# one move and a median of roughly twenty. Three reshuffles lifts the worst
+# case to the mid-thirties and leaves the ending intact: the board is
+# regenerated on the SAME silhouette, and when the allowance is gone the run
+# is over.
+SHAPES_RESHUFFLES = 3
 
 FPS = 60
 
-# Frame rate choices. None means "let the display drive it" - the window is
-# opened with vsync and the loop stops capping, so it runs at whatever the
-# monitor refreshes at. The rest are hard caps handed to Clock.tick().
-FPS_OPTIONS = (
-    (None, "VSYNC"),
-    (30, "30"), (60, "60"), (120, "120"),
-    (144, "144"), (165, "165"), (240, "240"), (360, "360"),
-)
-# 120 by default. The loop is capped by Clock.tick(), so the cap is a hard
-# ceiling no matter how much headroom the frame has - at 60 the game simply
-# could not run faster than 60 however fast it drew. Anything the machine
-# cannot sustain just falls short of the cap; it costs nothing to ask for.
-DEFAULT_FPS = 120
-
-
-def fps_label(value):
-    for cap, label in FPS_OPTIONS:
-        if cap == value:
-            return label
-    return str(value)
+# The one frame cap, handed to Clock.tick(). A hard ceiling no matter how much
+# headroom the frame has - at 60 the game simply could not run faster than 60
+# however fast it drew. Anything the machine cannot sustain just falls short
+# of the cap; it costs nothing to ask for.
+FRAME_CAP = 120
 
 # progression
 LEVEL_BASE_TARGET = 1500   # points needed to clear level 1 (massively increased from 1200 for extreme difficulty)
@@ -698,17 +653,12 @@ SPOTLIGHT_FEATHER = 46     # soft edge on the spotlight, authored px
 
 # graphics toggles, both on by default and switchable from the title menu
 SETTING_DEFS = (
-    ("fullscreen",  "FULLSCREEN",   "Fills Screen to Aspect Ratio"),
     ("backgrounds", "BACKGROUNDS",  "Show Level Artwork"),
     ("opaque",      "REDUCE TRANSPARENCY", "Solid Panels And Buttons"),
     ("smooth",      "SMOOTH ANIMATION", "Smooth Gem Animations"),
     ("shake",     "CAMERA SHAKE",        "Screen Shakes on Explosions"),
     ("particles", "BACKGROUND PARTICLES", "Small Particle Effects"),
-    ("showfps",   "SHOW FPS",             "Counter In The Corner"),
 )
-
-# Resolution options for the game window
-# (width, height, label, description)
 
 PARTICLE_COUNT = 46
 
@@ -795,7 +745,7 @@ BG_CROSSFADE = 2.6         # seconds for the new level backdrop to slide up
 IS_MACOS = sys.platform == "darwin"
 BACKDROPS_OK = os.environ.get("PRISMAC_NO_BACKDROPS", "") not in ("1", "true")
 
-# macOS is windowed-only.
+# macOS draws one flat opaque frame.
 #
 # This build of SDL discards a surface's per-pixel alpha on a plain blit: a
 # layer pixel reading (0,0,0,0) lands on the screen as opaque black. That is
@@ -808,13 +758,13 @@ BACKDROPS_OK = os.environ.get("PRISMAC_NO_BACKDROPS", "") not in ("1", "true")
 # window is opened at exactly the layer size and the game draws itself, its
 # backdrop included, straight onto the display as one opaque frame. There is
 # no letterbox, no scaling, and no alpha for SDL to lose.
-MAC_WINDOWED_ONLY = sys.platform == "darwin"
+MAC_OPAQUE_PATH = sys.platform == "darwin"
 
-# Settings that are unavailable on the macOS path. Fullscreen needs the
-# letterbox compositing; camera shake and smooth animation both need a
-# translucent surface blitted over the frame. Background particles are NOT in
-# here - they are painted straight onto the opaque frame and work fine.
-MAC_UNSUPPORTED = ("fullscreen", "shake", "smooth")
+# Settings that are unavailable on the macOS path. Camera shake and smooth
+# animation both need a translucent surface blitted over the frame. Background
+# particles are NOT in here - they are painted straight onto the opaque frame
+# and work fine.
+MAC_UNSUPPORTED = ("shake", "smooth")
 
 # Forced ON on macOS. The opaque path draws one flat frame, and the glassy
 # panels were tuned against a compositing pipeline; solid chrome is both what
@@ -1155,6 +1105,12 @@ TIMED_MUSIC_SUBDIR = "Timed Music"
 
 MUSIC_VOLUME = 1.0         # starting music level, 0.0 - 1.0
 SFX_START_VOLUME = 1.0     # starting sound-effect level, 0.0 - 1.0
+
+# Effects that can fire many times inside a single frame. Each gets a fixed
+# pool of reserved mixer channels rather than grabbing a fresh channel per
+# hit, which is what made a rainbow wipe over flame gems deafening.
+STACKING_SFX = ("explode", "rainbowzap", "match3")
+SFX_POOL = 3               # simultaneous copies allowed per stacking effect
 VOLUME_STEP = 0.05         # how much the - and = keys move the slider
 BASE_VOL_WIDTH = 150
 VOL_HEIGHT = 6
@@ -1655,6 +1611,22 @@ def is_gem(cell):
     return cell is not None and cell.cell_type == CELL_GEM
 
 
+def swappable(cell):
+    """A cell the player is actually allowed to pick up and move.
+
+    begin_swap() refuses anything that is None or a hole, so any move finder
+    that does not apply the same test is answering a different question than
+    the one being asked. has_move() and find_hint() both used to try every
+    adjacent pair on the board, holes included: on a Shapes board that meant
+    a swap with a blacked-out cell counted as a legal move. That single
+    oversight caused both Shapes faults - runs that ended almost immediately,
+    because new_shapes_grid() accepted a board whose only "moves" were
+    illegal ones, and runs that would not end at all, because a genuinely
+    stuck board still looked playable.
+    """
+    return cell is not None and cell.cell_type != CELL_EMPTY
+
+
 def is_clear_cell(cell):
     """Cells that can be cleared by explosions (gems, bombs, but NOT rocks)."""
     return cell is not None and cell.cell_type in (CELL_GEM, CELL_BOMB)
@@ -2064,15 +2036,17 @@ def has_move(g):
             if g[r][c] is not None and g[r][c].cell_type == CELL_GEM and g[r][c].power == HYPER:
                 for dr, dc in ((0, 1), (1, 0), (0, -1), (-1, 0)):
                     r2, c2 = r + dr, c + dc
-                    if in_bounds(r2, c2) and g[r2][c2] is not None:
+                    if in_bounds(r2, c2) and swappable(g[r2][c2]):
                         return True
     
-    # Try every adjacent pair
+    # Try every adjacent pair the player could actually swap
     for r in range(ROWS):
         for c in range(COLS):
+            if not swappable(g[r][c]):
+                continue
             for dr, dc in ((0, 1), (1, 0)):
                 r2, c2 = r + dr, c + dc
-                if not in_bounds(r2, c2):
+                if not in_bounds(r2, c2) or not swappable(g[r2][c2]):
                     continue
                 # Try the swap
                 g[r][c], g[r2][c2] = g[r2][c2], g[r][c]
@@ -2241,15 +2215,19 @@ def find_hint(g):
         for c in range(COLS):
             if g[r][c] is not None and g[r][c].cell_type == CELL_GEM and g[r][c].power == HYPER:
                 for dr, dc in ((0, 1), (1, 0), (0, -1), (-1, 0)):
-                    if in_bounds(r + dr, c + dc) and g[r + dr][c + dc] is not None:
+                    if in_bounds(r + dr, c + dc) and swappable(g[r + dr][c + dc]):
                         return (r, c), (r + dr, c + dc)
     
+    # Only swaps begin_swap() would accept: a hint pointing at a hole was a
+    # hint the player could not follow.
     moves = []
     for r in range(ROWS):
         for c in range(COLS):
+            if not swappable(g[r][c]):
+                continue
             for dr, dc in ((0, 1), (1, 0)):
                 r2, c2 = r + dr, c + dc
-                if not in_bounds(r2, c2):
+                if not in_bounds(r2, c2) or not swappable(g[r2][c2]):
                     continue
                 g[r][c], g[r2][c2] = g[r2][c2], g[r][c]
                 scores = bool(find_runs(g))
@@ -2342,9 +2320,12 @@ def collapse(g, bonuses=False, chaos=False, shapes=False, boom=False,
 def collapse_shapes(g, bonuses=False, boom=False, mask=None):
     """Collapse with support for irregular boards (holes/empty cells).
     
-    Gems and bombs fall down, passing through empty cells.
-    Rocks also fall.
-    Empty cells block gems from crossing, like invisible platforms.
+    Gems and bombs fall down, passing through empty cells. Rocks also fall.
+
+    Holes do NOT block a falling gem: the column is packed towards the bottom
+    around them, so a gem above a hole can end up below it. That is deliberate
+    - if holes blocked, a pocket sealed off from the top would never refill
+    and the board would drain until it deadlocked.
     """
     falls = {}
     # NOTE: bomb fuses are NOT ticked here. settle() does it once per player
@@ -3593,6 +3574,20 @@ class Audio:
         try:
             pygame.mixer.init()
             pygame.mixer.set_num_channels(24)   # cascades stack up fast
+            # Sounds that can be triggered many times in one frame get their
+            # own small pool of channels, reserved so the general pool cannot
+            # take them. Sound.play() picks any free channel, so a rainbow
+            # wipe over a board of flame gems started twenty copies of
+            # Explode.ogg inside a fifth of a second and every one of them
+            # summed - the mixer adds amplitudes, so twenty overlapping copies
+            # really are twenty times as loud. Playing into a fixed pool means
+            # a new hit steals the oldest channel instead of adding to it.
+            pygame.mixer.set_reserved(len(STACKING_SFX) * SFX_POOL)
+            self.pools = {}
+            for i, key in enumerate(STACKING_SFX):
+                self.pools[key] = [pygame.mixer.Channel(i * SFX_POOL + n)
+                                   for n in range(SFX_POOL)]
+            self.pool_next = {key: 0 for key in STACKING_SFX}
             self.ok = True
         except pygame.error as exc:
             print(f"No audio device ({exc}); running silent.")
@@ -3840,8 +3835,18 @@ class Audio:
         if not self.ok or self.muted:
             return
         sound = self.snd.get(key)
-        if sound is not None:
+        if sound is None:
+            return
+        pool = self.pools.get(key)
+        if pool is None:
             sound.play()
+            return
+        # Round-robin through this key's channels. The oldest of the pool is
+        # the one that gets interrupted, so a burst stays at pool-size
+        # loudness however many hits arrive.
+        i = self.pool_next[key]
+        self.pool_next[key] = (i + 1) % len(pool)
+        pool[i].play(sound)
 
     @classmethod
     def silent(cls):
@@ -3849,6 +3854,8 @@ class Audio:
         a = cls.__new__(cls)
         a.ok = False
         a.muted = True
+        a.pools = {}
+        a.pool_next = {}
         a.music_volume = MUSIC_VOLUME
         a.sfx_volume = SFX_START_VOLUME
         a.snd = {}
@@ -4296,71 +4303,6 @@ def spin_fade(image, angle, scale, fade):
     return out
 
 
-class ScrollList:
-    """A scrollable list of rows. Used for the music picker."""
-
-    @property
-    def ROW(self):
-        return S(34)
-
-    def __init__(self, rect):
-        self.rect = pygame.Rect(rect)
-        self.items = []
-        self.offset = 0.0
-        self.hover = -1
-        self.current = -1
-
-    @property
-    def visible(self):
-        return max(1, self.rect.height // self.ROW)
-
-    def max_offset(self):
-        return max(0, len(self.items) - self.visible)
-
-    def scroll(self, steps):
-        self.offset = max(0, min(self.max_offset(), self.offset + steps))
-
-    def index_at(self, pos):
-        if not self.rect.collidepoint(pos):
-            return -1
-        row = int(self.offset) + (pos[1] - self.rect.y) // self.ROW
-        return row if 0 <= row < len(self.items) else -1
-
-    def draw(self, screen, font):
-        # Navy, not a white wash. translucent() forces alpha to 255 under
-        # "reduce transparency", so (255,255,255,30) became a solid WHITE
-        # slab - which is what made the music and background pickers glare.
-        screen.blit(translucent_shared(self.rect.size, LIST_WELL, None, S(8)),
-                    self.rect.topleft)
-        clip = screen.get_clip()
-        screen.set_clip(self.rect)
-        top = int(self.offset)
-        for i in range(top, min(len(self.items), top + self.visible + 1)):
-            y = self.rect.y + (i - top) * self.ROW
-            if i == self.current:
-                screen.blit(translucent_shared((self.rect.width, self.ROW - S(2)),
-                                               ROW_ON, None, S(6)),
-                            (self.rect.x, y))
-            elif i == self.hover:
-                screen.blit(translucent_shared((self.rect.width, self.ROW - S(2)),
-                                               ROW_HOVER, None, S(6)),
-                            (self.rect.x, y))
-            colour = GOLD if i == self.current else TEXT
-            label = Button.fit(font, self.items[i], self.rect.width - S(20))
-            image = render_text(label, self.items[i], colour)
-            screen.blit(image, (self.rect.x + S(10),
-                                y + (self.ROW - image.get_height()) // 2))
-        screen.set_clip(clip)
-
-        # scrollbar, only when there is something to scroll to
-        if self.max_offset() > 0:
-            span = self.rect.height * self.visible / len(self.items)
-            pos = (self.rect.height - span) * self.offset / self.max_offset()
-            screen.blit(translucent_shared((S(4), int(span)), SCROLLBAR, None,
-                                           S(2)),
-                        (self.rect.right - S(6), self.rect.y + int(pos)))
-
-
 class Button:
     """Rounded button. Uses skin artwork when it was supplied, else draws."""
 
@@ -4544,16 +4486,13 @@ class Game:
         self.extras = {k: False for k, _, _ in EXTRA_DEFS}
         self.extra_clock = ENDLESS
         self.extras_note = ""
-        # everything on by default except fullscreen, which should not be
-        # forced on someone the first time they launch the game
-        self.settings = {k: k not in ("fullscreen", "opaque", "showfps")
-                         for k, _, _ in SETTING_DEFS}
-        if MAC_WINDOWED_ONLY:
+        # everything on by default except reduced transparency
+        self.settings = {k: k != "opaque" for k, _, _ in SETTING_DEFS}
+        if MAC_OPAQUE_PATH:
             for key in MAC_UNSUPPORTED:
                 self.settings[key] = False
             for key in MAC_FORCED_ON:
                 self.settings[key] = True
-        self.settings["fps"] = DEFAULT_FPS
         if not BACKDROPS_OK:
             self.settings["backgrounds"] = False
         self.settings_open = False
@@ -4593,13 +4532,11 @@ class Game:
         self.build_widgets()
         self.build_title_widgets()
         self.build_campaign_widgets()
-        self.bg_index_override = None  # track current background override
         self.bg_index = 0  # cached random background index
         self.bg_transition_active = False
         self.bg_transition = 0.0
         self.bg_transition_from = None
         self.bg_transition_to = None
-        self.bg_picker_open = False
         self.note_time = 0.0  # timer for note fade in/out
         self.reset()
 
@@ -4611,7 +4548,6 @@ class Game:
         self.font_big = load_font(font_scale("big"), bold=True)
         self.font = load_font(font_scale("body"))
         self.font_small = load_font(font_scale("small"))
-        self.font_tiny = load_font(font_scale("tiny"))
 
     def build_title(self):
         """Title art with a soft dark halo, so it reads on any background."""
@@ -4895,13 +4831,9 @@ class Game:
                 os.remove(path)
             except OSError:
                 pass
-        self.settings = {k: k not in ("fullscreen", "opaque", "showfps")
-                         for k, _, _ in SETTING_DEFS}
-        self.settings["fps"] = DEFAULT_FPS
+        self.settings = {k: k != "opaque" for k, _, _ in SETTING_DEFS}
         if not BACKDROPS_OK:
             self.settings["backgrounds"] = False
-        if self.display is not None:
-            self.settings["fullscreen"] = self.display.fullscreen
         self.wipe_open = False
         self.wipe_held = 0.0
         self.menu_open = False
@@ -5224,19 +5156,7 @@ class Game:
             for key, _, _ in SETTING_DEFS:
                 if isinstance(stored.get(key), bool):
                     self.settings[key] = stored[key]
-            rs = stored.get("render_scale")
-            if isinstance(rs, (int, float)) and any(
-                    abs(rs - f) < 0.01 for f, _ in SCALE_OPTIONS):
-                self.settings["render_scale"] = float(rs)
-            # None is a legitimate value - it means VSYNC - so this tests for
-            # the key rather than for truthiness. Reading it with .get() would
-            # make a save written before this option existed look like a
-            # request for vsync.
-            if "fps" in stored:
-                cap = stored["fps"]
-                if any(cap == option for option, _ in FPS_OPTIONS):
-                    self.settings["fps"] = cap
-        if MAC_WINDOWED_ONLY:
+        if MAC_OPAQUE_PATH:
             # A save written on another machine, or before this build, could
             # switch these back on.
             for key in MAC_UNSUPPORTED:
@@ -5259,7 +5179,7 @@ class Game:
         Always off on macOS: that path draws one opaque frame with no
         compositing, and the springy flourishes lean on translucent overlays.
         """
-        if MAC_WINDOWED_ONLY:
+        if MAC_OPAQUE_PATH:
             return False
         return self.settings.get("smooth", True)
 
@@ -5270,46 +5190,8 @@ class Game:
     def ease_pop(self, t):
         return ease_back(t) if self.bubbly else ease_in_out(t)
 
-    def apply_fullscreen(self, on):
-        """The one route in and out of fullscreen.
-
-        The menu toggle and F11 both come through here. They used not to:
-        F11 talked to the Display directly, so it could leave fullscreen
-        while the render scale stayed at 200% - a 2160x1620 layer in a
-        window that cannot be that big.
-        """
-        if self.display is None:
-            return None
-        if MAC_WINDOWED_ONLY:
-            # Windowed only here - see MAC_WINDOWED_ONLY. Nothing to switch.
-            self.settings["fullscreen"] = False
-            return None
-        # Order matters. Windowed mode opens a real WIDTH x HEIGHT window, so
-        # the scale has to come down BEFORE the window is created - resetting
-        # afterwards asked macOS for a 2160x1620 window first.
-        if not on and abs(RENDER_SCALE - 1.0) > 0.01:
-            self.rebuild_at_scale(1.0)
-        surface = self.display.set_fullscreen(on, self)
-        self.settings["fullscreen"] = bool(
-            surface.get_flags() & pygame.FULLSCREEN)
-        if not self.settings["fullscreen"]:
-            # The stored setting resets too, so it cannot spring back to 200%
-            # the next time fullscreen is opened.
-            self.settings["render_scale"] = DEFAULT_RENDER_SCALE
-        if self.menu_open:
-            self.build_scale_buttons()  # the chips only exist in fullscreen
-        self.save_settings()
-        return surface
-
-    def toggle_fullscreen(self):
-        return self.apply_fullscreen(not self.display.fullscreen)
-
     def toggle_setting(self, key):
-        if MAC_WINDOWED_ONLY and key in MAC_UNSUPPORTED + MAC_FORCED_ON:
-            self.audio.play("menuclick")
-            return
-        if key == "fullscreen" and self.display is not None:
-            self.toggle_fullscreen()
+        if MAC_OPAQUE_PATH and key in MAC_UNSUPPORTED + MAC_FORCED_ON:
             self.audio.play("menuclick")
             return
         self.settings[key] = not self.settings.get(key, True)
@@ -5878,8 +5760,6 @@ class Game:
         self.level = 1
         self.level_floor = 0          # score at which the current level began
         self.menu_open = False
-        self.music_open = False
-        self.music_picker_mode = "normal"  # "normal" or "timed" playlist
         self.dragging = None
         self.wants_quit = False
         self.hint = None
@@ -5915,6 +5795,7 @@ class Game:
         self.note_time = 0.0
         self.shape_cells = None
         self.shape_name = None
+        self.shape_reshuffles = SHAPES_RESHUFFLES
         # The easter egg counter is per-visit, and the glitch belongs to the
         # secret level alone - starting any other level turns it off, so
         # leaving that level leaves the corruption behind with it.
@@ -5947,7 +5828,6 @@ class Game:
         self.lock_kind = random.randrange(N_TYPES)
         self.lock_left = LOCK_SECONDS
         self.over = False
-        self.bg_index_override = None  # reset background to random each game
         # Cache the random background selection so it doesn't change every frame
         if self.backgrounds:
             self.bg_index = random.randrange(len(self.backgrounds))
@@ -5993,8 +5873,11 @@ class Game:
         """Fresh grid for the current level, rained in from above."""
         if self.mode == SHAPES:
             # A new level means a new silhouette; it only stays fixed for the
-            # duration of one level, including any reshuffle within it.
+            # duration of one level, including any reshuffle within it. The
+            # reshuffle allowance refills with it - it is a per-shape budget,
+            # not a per-run one, or a bad early shape would cripple the rest.
             self.pick_shape()
+            self.shape_reshuffles = SHAPES_RESHUFFLES
             self.grid = new_shapes_grid(bonuses=self.timed and self.timed_bonus_gems,
                                         mask=self.shape_cells)
         elif self.shape_cells:
@@ -6163,15 +6046,11 @@ class Game:
             return self.campaign_bg
         if not self.backgrounds:
             return None
-        if self.bg_index_override is not None:
-            return self.backgrounds[self.bg_index_override]
         return self.backgrounds[self.bg_index]
 
     def advance_background(self):
-        """Move to the next background for the next level, if no override is active."""
+        """Move to the next background for the next level."""
         if not self.backgrounds:
-            return
-        if self.bg_index_override is not None:
             return
         if len(self.backgrounds) < 2:
             return
@@ -6232,7 +6111,7 @@ class Game:
         for button in (self.panel_buttons() + self.menu_buttons
                        + self.title_buttons + self.finish_buttons()
                        + self.extra_buttons + self.over_buttons
-                       + self.music_buttons + self.resume_buttons):
+                       + self.resume_buttons):
             key = id(button)
             want = 1.0 if button.hover else 0.0
             have = self.hover_lift.get(key, 0.0)
@@ -6252,7 +6131,7 @@ class Game:
 
     def shake_offset(self):
         """INSANE explosive camera shake - rapid violent jitter."""
-        if MAC_WINDOWED_ONLY:
+        if MAC_OPAQUE_PATH:
             # Not supported here: shaking the UI needs a separate scratch
             # surface blitted with alpha, which this build renders black.
             return (0, 0)
@@ -6576,29 +6455,15 @@ class Game:
         x = PANEL_X + S(16)
         w = PANEL_W - S(32)
         bottom = PANEL_Y + PANEL_H - S(16)
-        # In campaign the area supplies the backdrop and the music, so those
-        # two pickers are not built at all; HINT takes the space they leave.
-        if self.mode == CAMPAIGN:
-            hint_h = S(46) * 3 + S(30)
-            self.buttons = [
-                Button((x, bottom - S(46) - S(14) - hint_h, w, hint_h), "HINT",
-                       self.show_hint, accent=HINT_COLOR),
-                Button((x, bottom - S(46), w, S(46)), "MENU", self.open_menu),
-            ]
-        else:
-            self.buttons = [
-                Button((x, bottom - S(46) * 4 - S(30), w, S(46)), "HINT",
-                       self.show_hint, accent=HINT_COLOR),
-                Button((x, bottom - S(46) * 3 - S(20), w, S(46)), "BACKGROUNDS",
-                       self.open_background_picker, accent=(176, 140, 240)),
-                Button((x, bottom - S(46) * 2 - S(10), w, S(46)), "MUSIC",
-                       self.open_music, accent=(150, 160, 190)),
-                Button((x, bottom - S(46), w, S(46)), "MENU", self.open_menu),
-            ]
-        # A campaign level fixes its own backdrop and music, so those two
-        # buttons are gone entirely there and HINT takes the space they
-        # freed up rather than leaving a hole in the panel.
+        # HINT over MENU in every mode. The panel used to carry BACKGROUNDS
+        # and MUSIC buttons outside campaign; with those gone HINT takes the
+        # space they freed rather than leaving a hole above MENU.
         tall = S(46) * 3 + S(20)
+        self.buttons = [
+            Button((x, bottom - S(46) - S(10) - tall, w, tall), "HINT",
+                   self.show_hint, accent=HINT_COLOR),
+            Button((x, bottom - S(46), w, S(46)), "MENU", self.open_menu),
+        ]
         self.campaign_panel = [
             Button((x, bottom - S(46) - S(10) - tall, w, tall), "HINT",
                    self.show_hint, accent=HINT_COLOR),
@@ -6619,9 +6484,9 @@ class Game:
         # looking half empty and pushed everything below it off the box.
         self.setting_rows = []
         for i, (key, label, blurb) in enumerate(SETTING_DEFS):
-            if MAC_WINDOWED_ONLY and key in MAC_UNSUPPORTED:
+            if MAC_OPAQUE_PATH and key in MAC_UNSUPPORTED:
                 blurb = "Not Supported By MacOS"
-            elif MAC_WINDOWED_ONLY and key in MAC_FORCED_ON:
+            elif MAC_OPAQUE_PATH and key in MAC_FORCED_ON:
                 blurb = "Always On For MacOS"
             self.setting_rows.append(
                 (key, pygame.Rect(sx, box.y + S(188) + i * S(SETTING_ROW),
@@ -6632,22 +6497,8 @@ class Game:
         # re-enabling the screen cannot raise AttributeError.
         self.setting_sliders = []
 
-        # Frame rate chips. Eight options do not fit on one line at this width,
-        # so they wrap onto two rows of four.
-        self.fps_buttons = []
-        self.fps_band_y = self.setting_rows[-1][1].bottom + S(30)
-        self.fps_band_h = S(36) * 2 + S(8)
-        self.build_fps_buttons()
-
-        # Zoom chips, built on demand and only while fullscreen. The band they
-        # sit in is reserved unconditionally so the buttons underneath keep one
-        # fixed home - moving them around was what broke their hitboxes.
-        self.scale_buttons = []
-        self.scale_band_y = self.fps_band_y + self.fps_band_h + S(28)
-        self.scale_band_h = S(42)
-
         half = (sw - S(20)) // 2
-        below = self.scale_band_y + self.scale_band_h
+        below = self.setting_rows[-1][1].bottom + S(24)
         # RETURN TO TITLE gets the full width and a taller box - it is the
         # one people reach for most
         self.menu_buttons = [
@@ -6739,35 +6590,6 @@ class Game:
                    self.close_credits),
         ]
 
-        picker = self.music_rect()
-        self.music_list = ScrollList((picker.x + S(24), picker.y + S(76),
-                                      picker.width - S(48), picker.height - S(150)))
-        pw = picker.width - S(48)
-        # Mode selector buttons (Normal and Timed)
-        half_w = (pw - S(8)) // 2
-        self.music_buttons = [
-            Button((picker.x + S(24), picker.y + S(50), half_w, S(18)), "NORMAL",
-                   lambda: self.set_music_picker_mode("normal")),
-            Button((picker.x + S(24) + half_w + S(8), picker.y + S(50), half_w, S(18)), "TIMED",
-                   lambda: self.set_music_picker_mode("timed")),
-            Button((picker.x + S(24), picker.bottom - S(62), pw, S(44)), "CLOSE",
-                   self.close_music,
-                   art=self.skinned("menubutton", (pw, S(44))),
-                   art_hover=self.skinned("menubuttonhovered", (pw, S(44)))),
-        ]
-
-        # Background picker list
-        bgpicker = self.music_rect()  # reuse same rect
-        self.bg_list = ScrollList((bgpicker.x + S(24), bgpicker.y + S(76),
-                                   bgpicker.width - S(48), bgpicker.height - S(150)))
-        bgw = bgpicker.width - S(48)
-        self.bg_picker_buttons = [
-            Button((bgpicker.x + S(24), bgpicker.bottom - S(62), bgw, S(44)), "CLOSE",
-                   self.close_background_picker,
-                   art=self.skinned("menubutton", (bgw, 44)),
-                   art_hover=self.skinned("menubuttonhovered", (bgw, 44))),
-        ]
-
         over = self.over_rect()
         ox, ow = over.x + S(34), over.width - S(68)
         third = (ow - S(20)) // 2
@@ -6783,10 +6605,6 @@ class Game:
             self.roll_campaign_credits, accent=GOLD)
 
     @staticmethod
-    def music_rect():
-        return pygame.Rect(WIDTH // 2 - S(230), HEIGHT // 2 - S(220), S(460), S(440))
-
-    @staticmethod
     def duration_picker_rect():
         return pygame.Rect(WIDTH // 2 - S(230), HEIGHT // 2 - S(170), S(460), S(280))
 
@@ -6796,9 +6614,10 @@ class Game:
 
     @staticmethod
     def menu_rect():
-        # Wide enough for a row of four zoom chips, tall enough for the
-        # sliders, seven toggles, two chip bands and the buttons underneath.
-        return pygame.Rect(WIDTH // 2 - S(330), S(6), S(660), S(792))
+        # Tall enough for the two sliders, the graphics toggles and the
+        # buttons underneath, and centred rather than pinned near the top -
+        # the old box was sized around two bands of chips that are gone.
+        return pygame.Rect(WIDTH // 2 - S(330), S(96), S(660), S(590))
 
     # -- button actions ---------------------------------------------------
 
@@ -6837,71 +6656,14 @@ class Game:
             # corrupted text rather than words.
             self.set_note(glitch_text(6 + left, salt=left))
 
-    def locked_picker(self, label):
-        """Campaign levels supply their own backdrop and music, so those two
-        pickers are switched off for the run rather than silently ignored."""
-        if self.mode != CAMPAIGN:
-            return False
-        area = CAMPAIGN_AREAS[campaign_area_of(self.campaign_level_num)]
-        self.set_note(f"{label} SET BY {area.upper()}")
-        self.audio.play("menuclick")
-        return True
-
-    def open_music(self):
-        """Song picker. Choosing one plays it, then the shuffle resumes."""
-        # Prevent opening music picker in secret mode
-        if self.secret_glitch:
-            return
-        if self.locked_picker("MUSIC"):
-            return
-        self.music_open = True
-        self.menu_open = False
-        self.sel = None
-        self.dragging = None
-        self.music_picker_mode = "normal"  # Reset to normal when opening
-        self.music_list.items = self.audio.track_names()
-        playing = self.audio.now_playing()
-        self.music_list.current = (self.music_list.items.index(playing)
-                                   if playing in self.music_list.items else -1)
-        self.music_list.offset = 0.0
-
-    def refresh_music_list(self):
-        self.music_list.items = self.audio.track_names()
-        playing = self.audio.now_playing()
-        self.music_list.current = (self.music_list.items.index(playing)
-                                   if playing in self.music_list.items else -1)
-        self.music_list.offset = 0.0
-
-    def set_music_picker_mode(self, mode):
-        """Switch music picker between 'normal' (endless) and 'timed'."""
-        self.music_picker_mode = mode
-        # Temporarily switch the audio mode to get the right playlist
-        old_mode = self.audio.mode
-        old_track = self.audio.track
-        if mode == "timed":
-            self.audio.mode = TIMED_MUSIC_MODE
-        else:
-            self.audio.mode = ENDLESS
-        # Reset track to 0 to avoid index out of range if new playlist is smaller
-        self.audio.track = 0
-        self.refresh_music_list()
-        # Restore the original mode and track
-        self.audio.mode = old_mode
-        self.audio.track = old_track
-        self.audio.play("menuclick")
-
     def overlay_open(self):
         """True when any panel sits above the screen. The title screen's
         first click reveals the mode buttons, and that must not eat clicks
         aimed at a panel on top of it."""
-        return (self.menu_open or self.music_open or self.bg_picker_open
-                or self.extras_open or self.credits_open or self.wipe_open
+        return (self.menu_open or self.extras_open or self.credits_open or self.wipe_open
                 or self.resume_open or self.timed_duration_picker_open
                 or self.campaign_open or self.space_banner
                 or self.star_banner or self.secret_open)
-
-    def close_music(self):
-        self.music_open = False
 
     def pick_duration(self, seconds):
         """Select timed mode duration and start the game."""
@@ -6927,28 +6689,6 @@ class Game:
         self.timed_duration_picker_open = False
         self.audio.play("menuclick")
 
-    def open_background_picker(self):
-        """Open the background picker dialog."""
-        # Prevent opening background picker in secret mode
-        if self.secret_glitch:
-            return
-        if self.locked_picker("BACKGROUND"):
-            return
-        self.bg_picker_open = True
-        self.menu_open = False
-        self.sel = None
-        self.dragging = None
-        # Generate list of background names
-        if self.backgrounds:
-            self.bg_list.items = self.background_names if self.background_names else [f"BG {i+1}" for i in range(len(self.backgrounds))]
-            self.bg_list.current = self.bg_index_override if self.bg_index_override is not None else 0
-            self.bg_list.offset = 0.0
-        self.audio.play("menuclick")
-
-    def close_background_picker(self):
-        self.bg_picker_open = False
-        self.audio.play("menuclick")
-
     # -- saving ------------------------------------------------------------
 
     def leave_run(self):
@@ -6964,7 +6704,6 @@ class Game:
         self.save_run()
         self.over = False
         self.menu_open = False
-        self.music_open = False
         self.on_title = True
         self.title_ready = True        # the picker is the screen, not the modes
         self.campaign_area = min(campaign_area_of(self.campaign_level_num),
@@ -7186,7 +6925,6 @@ class Game:
         self.secret_glitch = False
         self.dead_hint_taps = 0
         self.menu_open = False
-        self.music_open = False
         self.over = False
         self.on_title = True
         self.title_ready = False
@@ -7202,11 +6940,7 @@ class Game:
         if self.campaign_open:
             self.close_campaign()
         self.sync_menu_labels()
-        self.build_scale_buttons()  # rebuild scale buttons whenever menu opens
-        self.build_fps_buttons()    # and the frame-rate chips, for the highlight
         # the menu takes over: nothing else stays open behind it
-        self.music_open = False
-        self.bg_picker_open = False
         self.extras_open = False
         self.resume_open = False
         self.credits_open = False
@@ -7215,109 +6949,6 @@ class Game:
         self.menu_open = True
         self.sel = None
         self.dragging = None
-
-    def build_fps_buttons(self):
-        """Frame-rate chips, four to a row across two rows."""
-        self.fps_buttons = []
-        box = self.menu_rect()
-        sx, sw = box.x + S(30), box.width - S(60)
-        current = self.settings.get("fps", DEFAULT_FPS)
-
-        per_row, gap, height = 4, S(8), S(36)
-        btn_w = (sw - gap * (per_row - 1)) // per_row
-        for i, (cap, label) in enumerate(FPS_OPTIONS):
-            row, col = divmod(i, per_row)
-            on = cap == current
-            self.fps_buttons.append(Button(
-                (sx + col * (btn_w + gap),
-                 self.fps_band_y + row * (height + gap), btn_w, height),
-                label, (lambda c=cap: self.set_fps(c)),
-                accent=GOLD if on else None))
-
-    def set_fps(self, cap):
-        """Pick a frame cap. None means follow the display's own refresh.
-
-        Switching to or from VSYNC has to re-open the window: vsync is a
-        set_mode flag and cannot be changed on a live surface. The other caps
-        are just a number for Clock.tick(), so they need no rebuild at all.
-        """
-        was_vsync = self.settings.get("fps", DEFAULT_FPS) is None
-        self.settings["fps"] = cap
-        if was_vsync != (cap is None) and self.display is not None:
-            self.display.set_fullscreen(self.display.fullscreen, self)
-            self.build_scale_buttons()
-        self.build_fps_buttons()
-        self.audio.play("menuclick")
-        self.save_settings()
-
-    def frame_cap(self):
-        """What to hand Clock.tick(). 0 lets it run uncapped under vsync."""
-        cap = self.settings.get("fps", DEFAULT_FPS)
-        return 0 if cap is None else cap
-
-    def build_scale_buttons(self):
-        """Render-scale chips, laid into the reserved band. Fullscreen only."""
-        self.scale_buttons = []
-        if self.display is None or not self.display.fullscreen:
-            return
-
-        box = self.menu_rect()
-        sx, sw = box.x + S(30), box.width - S(60)
-        current = RENDER_SCALE
-
-        gap = S(8)
-        btn_w = (sw - gap * (len(SCALE_OPTIONS) - 1)) // len(SCALE_OPTIONS)
-        for i, (factor, label) in enumerate(SCALE_OPTIONS):
-            on = abs(factor - current) < 0.01
-            self.scale_buttons.append(Button(
-                (sx + i * (btn_w + gap), self.scale_band_y,
-                 btn_w, self.scale_band_h),
-                label,
-                lambda f=factor: self.apply_scale(f),
-                accent=GOLD if on else (120, 126, 140),
-            ))
-
-    def apply_scale(self, factor):
-        """Menu action: change the internal render resolution."""
-        if self.display is None or not self.display.fullscreen:
-            return
-        if abs(RENDER_SCALE - factor) < 0.01:
-            return
-        self.rebuild_at_scale(factor)
-        self.settings["render_scale"] = factor
-        self.save_settings()
-
-    def rebuild_at_scale(self, factor):
-        """Re-render the game at a new internal resolution.
-
-        Everything derived from the layout constants has to be rebuilt: the
-        type, the gem art, the cached panel surfaces and every widget rect.
-        Rebuilding only some of them was what made earlier attempts at this
-        fall apart.
-        """
-        was = RENDER_SCALE
-        apply_render_scale(factor)
-        if was:
-            k = RENDER_SCALE / was
-            self.mouse = (int(self.mouse[0] * k), int(self.mouse[1] * k))
-        self.build_fonts()
-        self.reload_assets()                 # sprites, effects, backdrops
-        self.panel_bg = translucent((PANEL_W, PANEL_H), PANEL_FILL,
-                                    PANEL_EDGE, S(14))
-        self.menu_bg = translucent(self.menu_rect().size, PANEL_FILL,
-                                   PANEL_EDGE, S(16))
-        self.motes = [[random.uniform(0, WIDTH), random.uniform(0, HEIGHT),
-                       random.uniform(1.0, 2.8) * RENDER_SCALE,
-                       random.uniform(-11, -3) * RENDER_SCALE,
-                       random.uniform(0.25, 0.7)]
-                      for _ in range(PARTICLE_COUNT)]
-        self.build_widgets()
-        self.build_title_widgets()
-        self.build_campaign_widgets()
-        self.apply_opacity()
-        if self.display is not None:
-            self.display.resize_layer()
-        self.build_scale_buttons()           # refresh which chip is lit
 
     def close_menu(self):
         self.menu_open = False
@@ -7340,8 +6971,6 @@ class Game:
         # every dialog, popup and overlay is dismissed, so nothing can draw
         # itself over the black or survive into the next frame
         self.menu_open = False
-        self.music_open = False
-        self.bg_picker_open = False
         self.extras_open = False
         self.resume_open = False
         self.credits_open = False
@@ -7369,35 +6998,6 @@ class Game:
             # Not a clean shutdown. pygame is never torn down and no save is
             # written; the process simply stops existing.
             os._exit(1)
-
-    def draw_fps(self, screen):
-        """The frame counter, top right, over everything.
-
-        Takes the DISPLAY surface rather than the 4:3 layer, and is called
-        last in present(), so it sits above the board, the panel, every menu
-        and dialog, and the letterbox bars - and is never scaled with the
-        layer, which keeps it crisp and the same size at any resolution.
-        """
-        if not self.settings.get("showfps", False):
-            return
-        text = f"{int(round(self.fps_now))}"
-        image = self.font_tiny.render(text, True, (255, 255, 255))
-        # Positioned against the DISPLAY surface, so in fullscreen it sits at
-        # the true right edge of the panel rather than at the edge of the 4:3
-        # layer - on a 16:10 screen those are hundreds of pixels apart. The
-        # inset is a hair off the corner so the glyphs are not clipped by
-        # rounding at odd scales.
-        pad = max(1, S(3))
-        w, h = screen.get_size()
-        x = w - image.get_width() - pad
-        y = pad
-        # A dark plate behind it: white numerals over a pale backdrop or the
-        # white PRISMAC logo were unreadable without one.
-        plate = pygame.Surface((image.get_width() + pad * 2,
-                                image.get_height() + pad * 2), pygame.SRCALPHA)
-        plate.fill((0, 0, 0, 110))
-        screen.blit(plate, (x - pad, y - pad))
-        screen.blit(image, (x, y))
 
     def draw_doom(self, screen):
         screen.fill((0, 0, 0))
@@ -7480,9 +7080,6 @@ class Game:
                 for slider in self.sliders:
                     if slider.hit(pos):
                         return slider
-                for button in self.fps_buttons + self.scale_buttons:
-                    if button.hit(pos):
-                        return button
                 for button in self.menu_buttons:
                     if button.hit(pos):
                         return button
@@ -7491,16 +7088,6 @@ class Game:
                 for button in self.title_buttons:
                     if button.hit(pos):
                         return button
-            return None
-        if self.music_open:
-            for button in self.music_buttons:
-                if button.hit(pos):
-                    return button
-            return None
-        if self.bg_picker_open:
-            for button in self.bg_picker_buttons:
-                if button.hit(pos):
-                    return button
             return None
         if self.over:
             for button in self.finish_buttons():
@@ -7511,9 +7098,6 @@ class Game:
             for slider in self.sliders:
                 if slider.hit(pos):
                     return slider
-            for button in self.fps_buttons + self.scale_buttons:
-                if button.hit(pos):
-                    return button
             for button in self.menu_buttons:
                 if button.hit(pos):
                     return button
@@ -7625,43 +7209,10 @@ class Game:
             hit.down = True
             self.audio.play("menuclick")
             return
-        # The picker panels are reachable from the title screen too, so they
-        # get first refusal. The title catch-all below swallows everything it
-        # sees, which is why choosing a song from the title screen never
-        # worked.
-        if self.on_title and not (self.music_open or self.bg_picker_open):
+        if self.on_title:
             if self.menu_open and not self.menu_rect().collidepoint(pos):
                 self.audio.play("menuclick")
                 self.close_menu()
-            return
-        if self.music_open:
-            row = self.music_list.index_at(pos)
-            if row >= 0:
-                self.audio.play("menuclick")
-                # Temporarily set audio mode to get the right playlist
-                old_mode = self.audio.mode
-                old_track = self.audio.track
-                if self.music_picker_mode == "timed":
-                    self.audio.mode = TIMED_MUSIC_MODE
-                else:
-                    self.audio.mode = ENDLESS
-                name = self.audio.play_chosen(row)
-                self.audio.mode = old_mode
-                self.audio.track = old_track
-                self.music_list.current = row
-            elif not self.music_rect().collidepoint(pos):
-                self.audio.play("menuclick")
-                self.close_music()
-            return
-        if self.bg_picker_open:
-            row = self.bg_list.index_at(pos)
-            if row >= 0:
-                self.audio.play("menuclick")
-                self.bg_index_override = row
-                self.bg_list.current = row
-            elif not self.music_rect().collidepoint(pos):
-                self.audio.play("menuclick")
-                self.close_background_picker()
             return
         if self.over:
             return                     # nothing but those two buttons is live
@@ -7704,21 +7255,16 @@ class Game:
         if self.dragging is not None:
             self.dragging.set_from(pos)
             return
-        # Handle hover for music and background picker lists
-        if self.music_open:
-            self.music_list.hover = self.music_list.index_at(pos)
-            return
-        if self.bg_picker_open:
-            self.bg_list.hover = self.bg_list.index_at(pos)
-            return
         # Don't allow button hover when duration picker is open
         if self.timed_duration_picker_open:
             return
         # Check for star hover on title screen (but not when menus are open)
-        if self.on_title and not self.campaign_open and not (self.menu_open or self.music_open 
-                                                               or self.bg_picker_open or self.extras_open 
-                                                               or self.credits_open or self.wipe_open 
-                                                               or self.resume_open or self.star_banner):
+        if self.on_title and not self.campaign_open and not (self.menu_open
+                                                             or self.extras_open
+                                                             or self.credits_open
+                                                             or self.wipe_open
+                                                             or self.resume_open
+                                                             or self.star_banner):
             self.star_hover = None
             for rect, key in self.star_rects:
                 if rect.collidepoint(pos):
@@ -7755,8 +7301,7 @@ class Game:
                        + self.menu_buttons + self.over_buttons
                        + self.title_buttons + self.setting_buttons
                        + self.extra_buttons + self.duration_buttons
-                       + self.credit_buttons + self.music_buttons
-                       + self.bg_picker_buttons + self.resume_buttons
+                       + self.credit_buttons + self.resume_buttons
                        + self.campaign_arrows + self.campaign_buttons
                        + self.space_buttons + self.wipe_buttons):
             button.hover = button in active and button.hit(pos)
@@ -7771,13 +7316,11 @@ class Game:
         fired = None
         for button in (self.buttons + self.campaign_panel + self.finish_buttons()
                        + self.menu_buttons + self.over_buttons
-                       + self.title_buttons + self.music_buttons
-                       + self.extra_buttons + self.scale_buttons + self.fps_buttons
+                       + self.title_buttons + self.extra_buttons
                        + self.setting_buttons + self.credit_buttons
                        + self.resume_buttons + self.wipe_buttons + self.duration_buttons
                        + self.campaign_arrows + self.campaign_buttons
-                       + self.space_buttons + self.star_buttons
-                       + self.bg_picker_buttons):
+                       + self.space_buttons + self.star_buttons):
             if button.down and button.hit(pos):
                 fired = button
             button.down = False
@@ -7785,7 +7328,7 @@ class Game:
             fired.action()
             return
 
-        if (self.over or self.menu_open or self.music_open
+        if (self.over or self.menu_open
                 or self.state != "idle" or self.press is None):
             return
         cell = self.cell_at(pos)
@@ -7881,8 +7424,7 @@ class Game:
         # The clock only runs while the board is actually playable. Opening
         # the menu pauses it - otherwise adjusting the volume costs you time.
         if (self.timed and not self.over
-                and not self.menu_open and not self.music_open
-                and not self.bg_picker_open
+                and not self.menu_open
                 and self.state not in PAUSED_STATES):
             self.time_left -= dt
             if self.time_left <= 0:
@@ -8426,7 +7968,22 @@ class Game:
             return
         if not has_move(self.grid):
             if self.mode == SHAPES:
-                # a Shapes board is fixed: running out of moves ends the run
+                # A Shapes board is fixed to its silhouette, so a dead board
+                # cannot be escaped by playing on - but ending on the first
+                # one made for brutally short runs. The player gets
+                # SHAPES_RESHUFFLES fresh deals on the same shape first; only
+                # once those are spent does the run actually end.
+                if self.shape_reshuffles > 0:
+                    self.shape_reshuffles -= 1
+                    self.grid = new_shapes_grid(
+                        bonuses=self.timed and self.timed_bonus_gems,
+                        mask=self.shape_cells)
+                    left = self.shape_reshuffles
+                    self.note = (f"NO MOVES - RESHUFFLED ({left} LEFT)"
+                                 if left else "NO MOVES - LAST RESHUFFLE")
+                    self.audio.play("shuffle")
+                    self.state = "idle"
+                    return
                 self.note = "NO MOVES LEFT"
                 self.end_game()
                 return
@@ -9217,40 +8774,6 @@ class Game:
         for button in self.over_buttons:
             button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
 
-    def draw_music(self, screen):
-        box = self.music_rect()
-        screen.blit(translucent_shared(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
-                    box.topleft)
-        title = self.font_big.render("MUSIC", True, TEXT)
-        screen.blit(title, (box.x + S(24), box.y + S(24)))
-        # SCROLL WHEEL hint removed
-        self.music_list.draw(screen, self.font)
-        for i, button in enumerate(self.music_buttons):
-            # Skip the CLOSE button (index 2), only draw NORMAL and TIMED
-            if i < 2:
-                # Highlight the active mode button (Normal or Timed)
-                if i == 0 and self.music_picker_mode == "normal":
-                    button.hover = True
-                elif i == 1 and self.music_picker_mode == "timed":
-                    button.hover = True
-                else:
-                    button.hover = False
-                button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
-        # Always draw the CLOSE button
-        if len(self.music_buttons) > 2:
-            self.music_buttons[2].draw(screen, self.font, self.hover_lift.get(id(self.music_buttons[2]), 0.0))
-
-    def draw_background_picker(self, screen):
-        box = self.music_rect()
-        screen.blit(translucent_shared(box.size, DIALOG_FILL, DIALOG_EDGE, S(16)),
-                    box.topleft)
-        title = self.font_big.render("BACKGROUNDS", True, TEXT)
-        screen.blit(title, (box.x + S(24), box.y + S(24)))
-        # SCROLL WHEEL hint removed
-        self.bg_list.draw(screen, self.font)
-        for button in self.bg_picker_buttons:
-            button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
-
     def sync_menu_labels(self):
         """Point the two context buttons at the right thing for where we are."""
         bottom = self.menu_buttons[2]
@@ -9286,7 +8809,7 @@ class Game:
         screen.blit(head, (box.x + S(30), box.y + S(172)))
         for key, rect, label, blurb in self.setting_rows:
             on = self.settings.get(key, True)
-            gated = MAC_WINDOWED_ONLY and key in MAC_UNSUPPORTED + MAC_FORCED_ON
+            gated = MAC_OPAQUE_PATH and key in MAC_UNSUPPORTED + MAC_FORCED_ON
             screen.blit(translucent_shared(rect.size,
                                     ROW_ON if on else ROW_OFF,
                                     None, S(8)), rect.topleft)
@@ -9312,19 +8835,6 @@ class Game:
                 shown = note.render(blurb, True, DIM)
                 screen.blit(shown, (rect.right - S(10) - shown.get_width(),
                                     rect.centery - shown.get_height() // 2))
-
-        head = self.font_small.render("FRAME RATE", True, DIM)
-        screen.blit(head, (box.x + S(30), self.fps_band_y - S(20)))
-        for button in self.fps_buttons:
-            button.draw(screen, self.font_small,
-                        self.hover_lift.get(id(button), 0.0))
-
-        if self.scale_buttons:
-            head = self.font_small.render("RESOLUTION", True, DIM)
-            screen.blit(head, (box.x + S(30), self.scale_band_y - S(20)))
-            for button in self.scale_buttons:
-                button.draw(screen, self.font_small,
-                            self.hover_lift.get(id(button), 0.0))
 
         for button in self.menu_buttons:
             button.draw(screen, self.font, self.hover_lift.get(id(button), 0.0))
@@ -9415,7 +8925,7 @@ class Game:
             return 232
         if self.space_banner or self.star_banner:
             return 232          # the reward notice owns the screen
-        if (self.menu_open or self.music_open or self.bg_picker_open
+        if (self.menu_open
                 or self.extras_open or self.resume_open
                 or self.timed_duration_picker_open):
             return 226
@@ -9771,10 +9281,6 @@ class Game:
             self.draw_menu(screen)
         if self.wipe_open:
             self.draw_wipe(screen)
-        if self.music_open and not self.secret_glitch:
-            self.draw_music(screen)
-        if self.bg_picker_open and not self.secret_glitch:
-            self.draw_background_picker(screen)
         # One dialog at a time. Winning the level that earns a star put the
         # star popup straight on top of the COMPLETE screen, obscuring it;
         # the finish screen waits its turn instead.
@@ -9794,14 +9300,8 @@ class Display:
     a wide screen shows more background rather than distorted gems.
     """
 
-    def __init__(self, fullscreen=False, vsync=False):
-        self.fullscreen = False
+    def __init__(self):
         self.surface = None
-        # Whether the window was opened asking for vsync. The Display is built
-        # before the Game, so the saved preference has to be handed in here -
-        # otherwise the first window ignores it and only a later toggle in the
-        # menu would take effect.
-        self.vsync = bool(vsync)
         self.layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         self._cover_cache = {}
         self._scaled = None
@@ -9819,36 +9319,24 @@ class Display:
         self.offset = (0, 0)
         # No probing here: there is no display yet to probe against, which is
         # exactly why the old check kept passing on machines that then drew a
-        # black 4:3 area. verify_compositing() runs from set_fullscreen().
-        self.set_fullscreen(fullscreen)
+        # black 4:3 area. verify_compositing() runs from open_window().
+        self.open_window()
 
-    def set_fullscreen(self, on, game=None):
-        """Switch mode, then rebuild anything that was converted for the old
-        display format.
+    def open_window(self, game=None):
+        """Open the window, then rebuild anything that was converted for a
+        previous display format.
 
         macOS invalidates surfaces produced by convert()/convert_alpha() when
         the display mode changes - they render black. Windows tolerates it,
         which is why this only showed up on one platform.
         """
-        if MAC_WINDOWED_ONLY:
-            on = False          # windowed only - see MAC_WINDOWED_ONLY
-        self.fullscreen = on
-        # vsync has to be asked for when the mode is set; it cannot be turned
-        # on later. Not every driver grants it, so a refusal falls back to a
-        # plain mode rather than leaving the game with no window at all.
-        if game is not None:
-            self.vsync = game.settings.get("fps", DEFAULT_FPS) is None
-        # Explicitly 0 for every capped option, not merely "left out". Some
-        # drivers vsync by default, which pinned the frame rate to the
-        # monitor's refresh and made 144/240/360 unreachable on a 60Hz panel
-        # no matter what Clock.tick was told.
-        want_vsync = 1 if self.vsync else 0
-        size = (0, 0) if on else (WIDTH, HEIGHT)
-        flags = pygame.FULLSCREEN if on else 0
+        # Explicitly vsync=0, not merely left out. Some drivers vsync by
+        # default, which pins the frame rate to the monitor's refresh however
+        # high FRAME_CAP is set.
         try:
-            self.surface = pygame.display.set_mode(size, flags, vsync=want_vsync)
+            self.surface = pygame.display.set_mode((WIDTH, HEIGHT), 0, vsync=0)
         except (pygame.error, TypeError):
-            self.surface = pygame.display.set_mode(size, flags)
+            self.surface = pygame.display.set_mode((WIDTH, HEIGHT), 0)
         self.recompute()
         self.layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         self._scaled = None
@@ -9868,12 +9356,6 @@ class Display:
         if game is not None:
             game.reload_assets()
         return self.surface
-
-    def toggle_with(self, game):
-        return self.set_fullscreen(not self.fullscreen, game)
-
-    def toggle(self):
-        return self.set_fullscreen(not self.fullscreen)
 
     def verify_compositing(self):
         """Decide how to get the UI layer onto the screen, by testing it.
@@ -10138,20 +9620,6 @@ class Display:
         self.offset = (int((dw - WIDTH * self.scale) / 2),
                        int((dh - HEIGHT * self.scale) / 2))
 
-    def resize_layer(self):
-        """Rebuild the render target after a render-scale change."""
-        self.layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        self.recompute()
-        self._scaled = None
-        self._pre = None
-        self._flat = None
-        self._base = None
-        self._base_key = None
-        self._cover_cache.clear()
-        clear_campaign_bg_cache()   # area art is built to the old layer size
-        clear_render_caches()       # every baked size is now wrong
-        self.verify_compositing()
-
     def to_game(self, pos):
         """Turn a real mouse position into virtual 960x720 coordinates."""
         if self.scale <= 0:
@@ -10213,7 +9681,7 @@ class Display:
                 (0, 0) if self.direct() else self.offset)
             pygame.display.flip()
             return
-        if MAC_WINDOWED_ONLY:
+        if MAC_OPAQUE_PATH:
             # One opaque pass, built in the same order as the normal path so
             # nothing is skipped:
             #   backdrop -> draw_wide(under) -> UI -> draw_wide(over)
@@ -10240,7 +9708,6 @@ class Display:
             # usual transparent clear would black it out on an opaque target.
             game.draw(self.surface, background=False, clear=False)
             game.draw_wide(self.surface, 1.0, (0, 0), under=False)
-            game.draw_fps(self.surface)      # last: above every layer
             pygame.display.flip()
             return
         self.surface.fill(BG)
@@ -10295,7 +9762,6 @@ class Display:
             self.surface.blit(self.scale_layer(size), self.offset)
 
         game.draw_wide(self.surface, self.scale, self.offset, under=False)
-        game.draw_fps(self.surface)          # last: above every layer
         pygame.display.flip()
 
 
@@ -10435,17 +9901,7 @@ def main():
     # away. Building at one size and switching afterwards meant rebuilding
     # the lot - including a second full pass over backgrounds/ - and on macOS
     # a surface converted for the previous display format comes back black.
-    prefs = read_settings().get("settings")
-    prefs = prefs if isinstance(prefs, dict) else {}
-    want_fullscreen = prefs.get("fullscreen") is True and not MAC_WINDOWED_ONLY
-    want_scale = prefs.get("render_scale")
-    if (want_fullscreen and isinstance(want_scale, (int, float))
-            and any(abs(want_scale - f) < 0.01 for f, _ in SCALE_OPTIONS)):
-        apply_render_scale(float(want_scale))
-    # VSYNC is stored as None, so this asks whether the key is present AND
-    # null - a missing key means the default cap, not vsync.
-    want_vsync = "fps" in prefs and prefs["fps"] is None
-    display = Display(fullscreen=want_fullscreen, vsync=want_vsync)
+    display = Display()
     clock = pygame.time.Clock()
 
     # ---- phase 1: just enough to put the title on screen ---------------
@@ -10463,9 +9919,6 @@ def main():
 
     game = Game(sprites)
     game.display = display
-    game.settings["fullscreen"] = display.fullscreen
-    if display.fullscreen:
-        game.settings["render_scale"] = RENDER_SCALE
     if game.title_bg is None:
         # No purpose-made title backdrop, and backgrounds/ has not been read
         # yet. Without this the title sits on flat BG for the whole load and
@@ -10536,7 +9989,6 @@ def main():
     # Audio replaced the silent placeholder.
     game.load_settings()
     game.load_campaign()
-    game.settings["fullscreen"] = display.fullscreen
     loader.step("save")
 
     loader.finish()
@@ -10544,7 +9996,7 @@ def main():
     while True:
         # The cap comes from the menu. 0 means uncapped, which under vsync
         # leaves the pacing to the display.
-        dt = min(clock.tick(game.frame_cap()) / 1000.0, 0.05)
+        dt = min(clock.tick(FRAME_CAP) / 1000.0, 0.05)
 
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
@@ -10560,16 +10012,12 @@ def main():
                 continue
             elif e.type == pygame.KEYDOWN and not game.data_wiped:
                 if e.key == pygame.K_ESCAPE:
-                    if game.music_open:
-                        game.close_music()
-                    elif game.menu_open:
+                    if game.menu_open:
                         game.close_menu()
                     else:
                         game.open_menu()
                 elif e.key in SECRET_SHUFFLE_KEYS:
                     game.secret_shuffle()
-                elif e.key == pygame.K_F11:
-                    game.toggle_fullscreen()
             elif e.type == MUSIC_END:
                 audio.next_track()
             elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
@@ -10578,11 +10026,6 @@ def main():
                 game.on_up(display.to_game(e.pos))
             elif e.type == pygame.MOUSEMOTION:
                 game.on_motion(display.to_game(e.pos))
-            elif e.type == pygame.MOUSEWHEEL:
-                if game.music_open:
-                    game.music_list.scroll(-e.y)
-                elif game.bg_picker_open:
-                    game.bg_list.scroll(-e.y)
 
         if game.wants_quit:
             pygame.quit()
