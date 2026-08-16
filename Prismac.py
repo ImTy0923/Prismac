@@ -51,6 +51,7 @@ import math
 import os
 import random
 import sys
+import time
 from pathlib import Path
 
 import pygame
@@ -59,6 +60,11 @@ try:
     import numpy as np           # optional: only used to pitch-shift cascades
 except ImportError:
     np = None
+
+try:
+    from pypresence import Presence
+except ImportError:
+    Presence = None
 
 # --------------------------------------------------------------------------
 # configuration
@@ -160,6 +166,9 @@ LEVEL_BASE_TARGET = 1500   # points needed to clear level 1 (massively increased
 # 25 million years of play - which made the "reach level 100" star unearnable.
 # 1.0435 puts level 100 at roughly fifteen hours instead.
 LEVEL_GROWTH = 1.0435
+
+# Discord Rich Presence
+DISCORD_APP_ID = "1538653311048360027"
 
 # timed mode
 ENDLESS, TIMED, TITLE = "endless", "timed", "title"
@@ -4407,6 +4416,49 @@ class Slider:
                            S(9) if dragging else S(8))
 
 
+class DiscordRPC:
+    """Simple Discord Rich Presence: just show 'Playing Prismac' with elapsed time."""
+    def __init__(self):
+        self.rpc = None
+        self.connected = False
+        self.start_time = int(time.time())
+        
+        if Presence is None:
+            return
+        
+        try:
+            self.rpc = Presence(DISCORD_APP_ID)
+            self.rpc.connect()
+            self.connected = True
+            self.update()
+        except Exception:
+            self.connected = False
+    
+    def update(self):
+        """Update presence with elapsed time. Called once per second from main loop."""
+        if not self.connected or self.rpc is None:
+            return
+        try:
+            self.rpc.update(
+                state="Playing Prismac",
+                large_image="prismac",
+                large_text="Prismac",
+                start=self.start_time
+            )
+        except Exception:
+            pass  # Discord not running, or connection lost
+    
+    def clear(self):
+        """Clear presence on quit."""
+        if self.connected and self.rpc:
+            try:
+                self.rpc.clear()
+                self.rpc.close()
+            except Exception:
+                pass
+            self.connected = False
+
+
 class Game:
     """State machine: idle -> swap -> (clear -> fall -> clear ...) -> idle."""
 
@@ -4538,6 +4590,7 @@ class Game:
         self.bg_transition_from = None
         self.bg_transition_to = None
         self.note_time = 0.0  # timer for note fade in/out
+        self.discord = DiscordRPC()
         self.reset()
 
     def build_fonts(self):
@@ -6956,6 +7009,8 @@ class Game:
 
     def quit(self):
         self.save_run()
+        if hasattr(self, 'discord'):
+            self.discord.clear()
         self.wants_quit = True
 
     # -- the secret level's ending -----------------------------------------
@@ -9993,6 +10048,8 @@ def main():
 
     loader.finish()
 
+    discord_update_timer = 0.0  # throttle discord updates to once per second
+
     while True:
         # The cap comes from the menu. 0 means uncapped, which under vsync
         # leaves the pacing to the display.
@@ -10044,6 +10101,12 @@ def main():
             game.update_resume(dt, held)
         game.update(dt)
         display.present(game)
+        
+        # Update Discord presence once per second
+        discord_update_timer += dt
+        if discord_update_timer >= 1.0:
+            game.discord.update()
+            discord_update_timer = 0.0
 
 
 if __name__ == "__main__":
